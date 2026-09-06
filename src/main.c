@@ -30,6 +30,9 @@
 #define K_CLASS K5('c', 'l', 'a', 's', 's')
 #define K_ID K2('i', 'd')
 #define K_STYLE K5('s', 't', 'y', 'l', 'e')
+#define K_DISPLAY K7('d', 'i', 's', 'p', 'l', 'a', 'y')
+#define K_TALIGN K8('t', 'e', 'x', 't', '-', 'a', 'l', 'i')
+#define K_TTRANS K8('t', 'e', 'x', 't', '-', 't', 'r', 'a')
 
 static uint64_t pk(const char *s) {
     uint64_t k;
@@ -167,46 +170,64 @@ static void parse_css(char *css) {
         if (!e) break;
         char *s0 = pos;
         for (char *q = pos; q < b; q++) if (*q == '}') s0 = q + 1;
-        Rule *r = R + NR++;
-        r->sel = cut(s0, b);
-        split_decls(b + 1, e, r);
-        if (!*r->sel) NR--;
+        Rule tmp = {0};
+        split_decls(b + 1, e, &tmp);
+        for (char *q = s0; q < b && NR < 64;) {   
+            char *c = memchr(q, ',', b - q);
+            if (!c) c = b;
+            Rule *r = R + NR++;
+            *r = tmp;
+            r->sel = cut(q, c);
+            if (!*r->sel) NR--;
+            q = c + 1;
+        }
         pos = e + 1;
     }
 }
 
-static int match_compound(const char *c, Node *n) {  
+static int match_compound(const char *c, Node *n) {
     if (n->tag[0] == '#') return -1;
     int ids = 0, cls = 0, tags = 0, cl = 0;
-    char mode = 't', cur[64], buf[256], pat[66];
+    char mode = 't', cur[64];
     for (int k = 0;; k++) {
         char ch = c[k];
-        if (ch == '.' || ch == '#' || !ch) {
+        if (ch == '.' || ch == '#' || ch == '[' || ch == ']' || !ch) {
             cur[cl] = 0;
             if (cl) {
                 uint64_t ck = pk(cur);
                 if (mode == 't') {
-                    if (n->tagpk != ck) return -1;
-                    tags++;
-                } else {
-                    uint64_t ak = mode == '.' ? K_CLASS : K_ID;
+                    if (ck != K1('*')) {              
+                        if (n->tagpk != ck) return -1;
+                        tags++;
+                    }
+                } else if (mode == '.') {
                     const char *v = 0;
                     for (int i = 0; i < n->nattr; i++)
-                        if (pk(n->attrs[i].k) == ak) v = n->attrs[i].v;
+                        if (pk(n->attrs[i].k) == K_CLASS) v = n->attrs[i].v;
                     if (!v) return -1;
-                    if (mode == '.') {
-                        snprintf(buf, sizeof buf, " %s ", v);
-                        snprintf(pat, sizeof pat, " %s ", cur);
-                        if (!strstr(buf, pat)) return -1;
-                        cls++;
-                    } else {
-                        if (pk(v) != ck) return -1;
-                        ids++;
-                    }
+                    char buf[256], pat[66];
+                    snprintf(buf, sizeof buf, " %s ", v);
+                    snprintf(pat, sizeof pat, " %s ", cur);
+                    if (!strstr(buf, pat)) return -1;
+                    cls++;
+                } else if (mode == '#') {
+                    const char *v = 0;
+                    for (int i = 0; i < n->nattr; i++)
+                        if (pk(n->attrs[i].k) == K_ID) v = n->attrs[i].v;
+                    if (!v || pk(v) != ck) return -1;
+                    ids++;
+                } else {          
+                    char *eq = strchr(cur, '=');
+                    if (eq) *eq = 0;
+                    const char *v = 0;
+                    for (int i = 0; i < n->nattr; i++)
+                        if (pk(n->attrs[i].k) == pk(cur)) v = n->attrs[i].v;
+                    if (!v || (eq && pk(v) != pk(eq + 1))) return -1;
+                    cls++;
                 }
             }
             if (!ch) break;
-            mode = ch;
+            mode = ch == ']' ? 't' : ch;
             cl = 0;
         } else if (cl < 63) cur[cl++] = ch;
     }
@@ -215,13 +236,16 @@ static int match_compound(const char *c, Node *n) {
 
 static int match_selector(const char *sel, Node *n) {
     const char *ps[8]; int pl[8], np = 0;
+    char sep[9] = "";                        
     for (const char *p = sel; *p && np < 8;) {
         while (ISWS(*p)) p++;
+        if (*p == '>') { sep[np] = '>'; p++; continue; }
         if (!*p) break;
         ps[np] = p;
-        while (*p && !ISWS(*p)) p++;
+        while (*p && !ISWS(*p) && *p != '>') p++;
         pl[np] = p - ps[np];
         np++;
+        sep[np] = ' ';
     }
     if (!np) return -1;
     char cb[64];
@@ -230,10 +254,16 @@ static int match_selector(const char *sel, Node *n) {
     if (spec < 0) return -1;
     Node *a = n->parent;
     for (int k = np - 2; k >= 0; k--) {
-        int s = -1;
         memcpy(cb, ps[k], pl[k]); cb[pl[k]] = 0;
-        while (a && (s = match_compound(cb, a)) < 0) a = a->parent;
-        if (!a) return -1;
+        int s;
+        if (sep[k + 1] == '>') {            
+            if (!a) return -1;
+            s = match_compound(cb, a);
+            if (s < 0) return -1;
+        } else {
+            while (a && (s = match_compound(cb, a)) < 0) a = a->parent;
+            if (!a) return -1;
+        }
         spec += s;
         a = a->parent;
     }
@@ -273,9 +303,33 @@ static void apply_styles(Node *n) {
     for (int c = 0; c < n->nchild; c++) apply_styles(n->child[c]);
 }
 
+static const char *stget(Node *n, uint64_t k) {
+    for (int i = 0; i < n->nst; i++)
+        if (pk(n->st[i].k) == k) return n->st[i].v;
+    return 0;
+}
+
+static int rgb256(int r, int g, int b) {
+    r = r < 0 ? 0 : r > 255 ? 255 : r;
+    g = g < 0 ? 0 : g > 255 ? 255 : g;
+    b = b < 0 ? 0 : b > 255 ? 255 : b;
+    if (r == g && g == b) return r < 8 ? 16 : r > 248 ? 231 : 232 + ((r - 8) * 205 >> 11);
+    return 16 + 36 * ((r * 1287 + 32896) >> 16)
+         + 6 * ((g * 1287 + 32896) >> 16) + ((b * 1287 + 32896) >> 16);
+}
+
 static int ansi_color(const char *v) {
     while (*v == ' ') v++;
     if (isdigit((unsigned char)*v)) { int n = atoi(v); return n < 256 ? n : -1; }
+    if (!memcmp(v, "rgb", 3)) {
+        int r, g, b;
+        float a = 1;
+        if (sscanf(v + (v[3] == 'a' ? 5 : 4), " %d , %d , %d , %f", &r, &g, &b, &a) < 3)
+            return -1;
+        if (a < 0) a = 0;
+        if (a > 1) a = 1;
+        return rgb256(r * a + .5f, g * a + .5f, b * a + .5f); 
+    }
     if (*v == '#') {
         size_t len = strlen(v);
         if (len != 4 && len != 7) return -1;
@@ -287,9 +341,7 @@ static int ansi_color(const char *v) {
         } else {
             r = hx >> 16 & 0xff; g = hx >> 8 & 0xff; b = hx & 0xff;
         }
-        if (r == g && g == b) return r < 8 ? 16 : r > 248 ? 231 : 232 + ((r - 8) * 205 >> 11);
-        return 16 + 36 * ((r * 1287 + 32896) >> 16)   
-             + 6 * ((g * 1287 + 32896) >> 16) + ((b * 1287 + 32896) >> 16);
+        return rgb256(r, g, b);
     }
     switch (pk(v)) {
         case K5('b', 'l', 'a', 'c', 'k'): return 0;
@@ -298,8 +350,17 @@ static int ansi_color(const char *v) {
         case K6('y', 'e', 'l', 'l', 'o', 'w'): return 3;
         case K4('b', 'l', 'u', 'e'): return 4;
         case K7('m', 'a', 'g', 'e', 'n', 't', 'a'): return 5;
-        case K4('c', 'y', 'a', 'n'): return 6;
+        case K4('c', 'y', 'a', 'n'): case K4('a', 'q', 'u', 'a'): return 6;
         case K5('w', 'h', 'i', 't', 'e'): return 7;
+        case K4('l', 'i', 'm', 'e'): return 10;
+        case K4('n', 'a', 'v', 'y'): return 18;
+        case K4('t', 'e', 'a', 'l'): return 30;
+        case K6('m', 'a', 'r', 'o', 'o', 'n'): return 88;
+        case K6('p', 'u', 'r', 'p', 'l', 'e'): return 90;
+        case K5('o', 'l', 'i', 'v', 'e'): return 100;
+        case K7('f', 'u', 'c', 'h', 's', 'i', 'a'): return 201;
+        case K4('g', 'r', 'a', 'y'): return 244;
+        case K6('s', 'i', 'l', 'v', 'e', 'r'): return 250;
     }
     return -1;
 }
@@ -340,7 +401,8 @@ static void collect_text(Node *n, char *out, size_t cap) {
 static void draw_button(Node *n) {
     char text[256] = "";
     collect_text(n, text, sizeof text);
-    int pad = 1, fg = -1, bg = -1, flags = 0;    
+    int pad = 1, fg = -1, bg = -1, flags = 0;
+    const char *trans = 0;
     for (int i = 0; i < n->nst; i++) {
         const char *k = n->st[i].k, *v = n->st[i].v;
         switch (pk(k)) {
@@ -356,7 +418,17 @@ static void draw_button(Node *n) {
             case K8('t', 'e', 'x', 't', '-', 'd', 'e', 'c'):
                 if (!strcmp(v, "underline")) flags |= 4;
                 break;
+            case K_TALIGN:
+                if (!strcmp(v, "center")) flags |= 8;
+                break;
+            case K_TTRANS: trans = v; break;
         }
+    }
+    if (trans) {
+        int up = !strcmp(trans, "uppercase"), lo = !strcmp(trans, "lowercase");
+        if (up || lo)
+            for (char *q = text; *q; q++)
+                *q = up ? toupper((unsigned char)*q) : tolower((unsigned char)*q);
     }
     char seq[64] = "";
     if (fg >= 0) sprintf(seq + strlen(seq), "\x1b[38;5;%dm", fg);
@@ -365,21 +437,35 @@ static void draw_button(Node *n) {
     if (flags & 2) strcat(seq, "\x1b[3m");
     if (flags & 4) strcat(seq, "\x1b[4m");
     int w = (int)strlen(text) + pad * 2;
-    printf("%s+%.*s+%s\n", seq, w, "------------------------------------------------", RESET);
-    printf("%s|%*s%s%*s|%s\n", seq, pad, "", text, pad, "", RESET);
-    printf("%s+%.*s+%s\n", seq, w, "------------------------------------------------", RESET);
+    int cx = flags & 8 && w < 80 ? (80 - w) >> 1 : 0;
+    printf("%*s%s+%.*s+%s\n", cx, "", seq, w, "------------------------------------------------", RESET);
+    printf("%*s%s|%*s%s%*s|%s\n", cx, "", seq, pad, "", text, pad, "", RESET);
+    printf("%*s%s+%.*s+%s\n", cx, "", seq, w, "------------------------------------------------", RESET);
 }
 
 static void render(Node *n) {
     if (n->tagpk == K_TEXT) {
         Node *p = n->parent;
         if (p && p->tagpk != K_BUTTON) {
+            const char *tt = stget(p, K_TTRANS);
+            const char *al = stget(p, K_TALIGN);
+            int cx = al && !strcmp(al, "center") ? (80 - n->tlen) >> 1 : 0;
+            if (cx > 0) printf("%*s", cx, "");
             emit_style(p);
-            printf("%.*s", n->tlen, n->text);
+            int up = tt && !strcmp(tt, "uppercase");
+            int lo = tt && !strcmp(tt, "lowercase");
+            for (int i = 0; i < n->tlen; i++) {
+                char ch = n->text[i];
+                if (up) ch = toupper((unsigned char)ch);
+                else if (lo) ch = tolower((unsigned char)ch);
+                putchar(ch);
+            }
             fputs(RESET, stdout);
         }
         return;
     }
+    const char *d = stget(n, K_DISPLAY);
+    if (d && !strcmp(d, "none")) return;
     if (n->tagpk == K_BUTTON) { draw_button(n); return; }
     if (n->tagpk == K_BR) { putchar('\n'); return; }
     if (n->tagpk == K_STYLE) return;

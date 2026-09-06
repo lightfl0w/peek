@@ -1,14 +1,19 @@
 <!DOCTYPE html>
 <html><head><style>
   button { padding: 2; font-weight: bold; }
-  .btn { color: 231; background-color: #0af; }
-  .danger { color: 231; background-color: #f00; }
-  p { color: green; }
+  .btn { color: 231; background-color: rgb(20, 90, 160); }
+  .btn.danger { background-color: rgba(255, 0, 0, 0.6); }
+  p, .note { color: green; }
+  body > p.head { color: navy; text-align: center; text-transform: uppercase; }
   .u { text-decoration: underline; }
+  [data-info] { color: teal; }
+  .gone { display: none; }
 </style></head>
 <body>
-  <p>file mode works</p>
-  <p class="u">underlined text</p>
+  <p class="head">css3 ready</p>
+  <p class="u" data-info="hi">underlined text</p>
+  <p class="note">comma and rgb ready</p>
+  <p class="gone">you cannot see me</p>
   <button class="btn">OPEN</button>
   <button class="btn danger">DELETE</button>
 </body></html>
