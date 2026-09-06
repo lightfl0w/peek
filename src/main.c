@@ -382,36 +382,41 @@ static void render(Node *n) {
     }
     if (n->tagpk == K_BUTTON) { draw_button(n); return; }
     if (n->tagpk == K_BR) { putchar('\n'); return; }
+    if (n->tagpk == K_STYLE) return;
     for (int i = 0; i < n->nchild; i++) render(n->child[i]);
     if (n->tagpk == K_DIV || n->tagpk == K_P ||
         n->tagpk == K_HTML || n->tagpk == K_BODY) putchar('\n');
 }
 
-static char HTML[] =
-    "<!DOCTYPE html>\n"
-    "<html><body>\n"
-    "  <div id=\"main\" class=\"box\">\n"
-    "    <p class=\"title\">Hello <b>Parser</b></p>\n"
-    "    <button class=\"btn\">OK</button>\n"
-    "    <button class=\"btn danger\">Delete</button>\n"
-    "    <p style=\"color: red\">inline wins</p>\n"
-    "  </div>\n"
-    "</body></html>"
-    "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+static char BUF[1 << 16];
 
-static char CSS[] =
-    "button { padding: 2; font-weight: bold; }\n"
-    ".btn { color: 16; background-color: #0ff; }\n"
-    ".danger { color: 231; background-color: #f00; }\n"
-    ".box .title { color: #0000ff; text-decoration: underline; }\n"
-    "b { font-style: italic; }\n"
-    "p { color: green; }\n"
-    "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+static Node *find_tag(Node *n, uint64_t k) {
+    if (n->tagpk == k) return n;
+    for (int i = 0; i < n->nchild; i++) {
+        Node *r = find_tag(n->child[i], k);
+        if (r) return r;
+    }
+    return NULL;
+}
 
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc < 2) return fprintf(stderr, "usage: %s <file.html>\n", argv[0]), 1;
+    FILE *f = fopen(argv[1], "rb");
+    if (!f) return perror(argv[1]), 1;
+    size_t len = fread(BUF, 1, sizeof BUF - 8, f);
+    if (ferror(f)) return perror(argv[1]), 1;
+    BUF[len] = 0;
+    fclose(f);
     fputs(CLEAR, stdout);
-    parse_css(CSS);
-    apply_styles(parse_html(HTML));
-    render(POOL);
+    Node *dom = parse_html(BUF);
+    char *css = "";
+    Node *st = find_tag(dom, K_STYLE);
+    if (st && st->nchild && st->child[0]->tagpk == K_TEXT) {
+        Node *t = st->child[0];
+        css = t->text, t->text[t->tlen] = 0;
+    }
+    parse_css(css);
+    apply_styles(dom);
+    render(dom);
     return 0;
 }

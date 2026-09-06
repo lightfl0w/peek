@@ -1,6 +1,6 @@
 add_rules("mode.debug", "mode.release")
 
-target("html")
+target("peek")
     set_kind("binary")
     add_files("src/*.c")
 
