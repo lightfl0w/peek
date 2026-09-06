@@ -32,6 +32,23 @@
   <button class="btn flat">FLAT</button>
   <hr>
   <p>entities: &lt;tag&gt; &quot;q&quot; a&nbsp;b</p>
-  <script>alert("hidden");</script>
+  <script>
+    console.log("peek js ready, body =", document.body.tagName);
+    const note = document.querySelector(".note");
+    note.textContent = "text rewritten by QuickJS";
+    note.style.color = "red";
+    document.querySelector(".gone").style.display = "block";
+    document.querySelectorAll("li")[0].textContent = "first item (js)";
+    document.querySelector("button").style.width = "22";
+    console.log("p count =", document.querySelectorAll("p").length);
+    alert("peek dialog: alert works");
+    document.querySelectorAll("button")[0].onclick = function () {
+      alert("OPEN clicked, focus was: " + this.tagName);
+    };
+    document.querySelectorAll("button")[1].onclick = function () {
+      this.style.backgroundColor = "#c60";
+      console.log("FLAT clicked");
+    };
+  </script>
 </body>
 </html>
