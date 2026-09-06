@@ -1,19 +1,37 @@
 <!DOCTYPE html>
-<html><head><style>
-  button { padding: 2; font-weight: bold; }
-  .btn { color: 231; background-color: rgb(20, 90, 160); }
-  .btn.danger { background-color: rgba(255, 0, 0, 0.6); }
-  p, .note { color: green; }
-  body > p.head { color: navy; text-align: center; text-transform: uppercase; }
-  .u { text-decoration: underline; }
-  [data-info] { color: teal; }
-  .gone { display: none; }
-</style></head>
+<html>
+<head>
+  <title>peek demo</title>
+  <style>
+    body { color: silver; }
+    body > p.head { color: hsl(210, 100%, 60%); text-align: center; text-transform: uppercase; }
+    p + p { color: hsl(120, 100%, 50%); }            /* 相邻兄弟 */
+    ul ~ p { font-style: italic; }                   /* 通用兄弟 */
+    li:last-child { text-decoration: line-through; } /* 伪类 */
+    [data-user^="u"] { color: aqua; }                /* 前缀匹配 */
+    [data-user$="n"] { text-decoration: underline; } /* 后缀匹配 */
+    .gone { display: none; }
+    .btn { color: 231; background-color: rgb(20 90 160); padding: 2;
+           font-weight: bold; width: 16; text-align: center; }
+    .flat { border: none; background-color: #0a0; }
+    .note { color: olive; }
+  </style>
+</head>
 <body>
-  <p class="head">css3 ready</p>
-  <p class="u" data-info="hi">underlined text</p>
-  <p class="note">comma and rgb ready</p>
+  <p class="head">css3 &amp; html5 ready</p>
+  <p>rgb space syntax</p>
+  <ul>
+    <li>first item</li>
+    <li>second item</li>
+  </ul>
+  <p class="note">after list, italic via ~</p>
   <p class="gone">you cannot see me</p>
+  <div data-user="user1">^= prefix match</div>
+  <div data-user="admin">$= suffix match</div>
   <button class="btn">OPEN</button>
-  <button class="btn danger">DELETE</button>
-</body></html>
+  <button class="btn flat">FLAT</button>
+  <hr>
+  <p>entities: &lt;tag&gt; &quot;q&quot; a&nbsp;b</p>
+  <script>alert("hidden");</script>
+</body>
+</html>
