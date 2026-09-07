@@ -8,6 +8,13 @@ target("peek")
     add_packages("quickjs")
     set_rundir("$(projectdir)")
 
+target("check")
+    set_kind("phony")
+    add_deps("peek")
+    on_run(function ()
+        os.exec("sh tests/run.sh")
+    end)
+
 --
 -- If you want to known more usage about xmake, please see https://xmake.io
 --

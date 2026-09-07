@@ -1,0 +1,20 @@
+<style>
+body { color: silver; }
+h1 { color: red; }
+p + p { color: green; }
+ul ~ p { font-style: italic; }
+li:last-child { text-decoration: line-through; }
+.gone { display: none; }
+div[data-user^="u"] { color: aqua; }
+div[data-user$="n"] { color: navy; }
+</style>
+<body>
+<h1>heading one</h1>
+<p>first para</p>
+<p>second para</p>
+<ul><li>alpha</li><li>beta</li></ul>
+<p class="gone">hidden text</p>
+<div data-user="user1">prefix</div>
+<div data-user="admin">suffix</div>
+<hr>
+</body>
