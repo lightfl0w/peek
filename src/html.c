@@ -37,32 +37,50 @@ static void add_text(char *s, char *e, Node *parent) {
     *e = sv;
 }
 
+static char *raw_end(char *p, char *end, const char *name, int nl) {
+    char *q = p;
+    while (q < end) {
+        char *lt = memchr(q, '<', (size_t)(end - q));
+        if (!lt) return end;
+        if (lt + 1 < end && lt[1] == '/' && lt + 2 + nl <= end &&
+            !strncasecmp(lt + 2, name, (size_t)nl)) {
+            char c = lt + 2 + nl < end ? lt[2 + nl] : (char)0;
+            if (lt + 2 + nl >= end || c == '>' || ISWS(c) || c == '/') return lt;
+        }
+        q = lt + 1;
+    }
+    return end;
+}
+
 Node *parse_html(char *src) {
     Node **stk = 0;
     int scap = 0, top = 0;
     GROW(stk, 1, scap, Node *);
     stk[top++] = node(N_ROOT);
+    char *end = src + strlen(src);
     char *p = src;
-    while (*p) {
+    while (p < end) {
         if (*p != '<') {
-            char *e = strchr(p, '<');
-            if (!e) e = p + strlen(p);
+            char *e = memchr(p, '<', (size_t)(end - p));
+            if (!e) e = end;
             add_text(p, e, stk[top - 1]);
             p = e;
         } else {
-            char *e = strchr(p, '>');
+            char *e = memchr(p, '>', (size_t)(end - p));
             if (!e) {
-                char *nx = strchr(p + 1, '<');
-                char *end = nx ? nx : p + strlen(p);
-                add_text(p + 1, end, stk[top - 1]);
-                p = end;
+                char *nx = p + 1 < end
+                    ? memchr(p + 1, '<', (size_t)(end - p - 1))
+                    : 0;
+                char *t = nx ? nx : end;
+                add_text(p + 1, t, stk[top - 1]);
+                p = t;
                 continue;
             }
             char *t = cut(p + 1, e);
             p = e + 1;
             if (!strncmp(t, "!--", 3)) {
                 char *c = strstr(p, "-->");
-                p = c ? c + 3 : p + strlen(p);
+                p = c ? c + 3 : end;
             } else if (*t == '!') {
             } else if (*t == '/') {
                 while (top > 1 && stk[top - 1]->tagpk != pk(t + 1)) top--;
@@ -75,7 +93,19 @@ Node *parse_html(char *src) {
                 if (sp) parse_attrs(sp + 1, n);
                 n->parent = stk[top - 1];
                 push_child(stk[top - 1], n);
+                int raw = 0;
                 if (!sc && !(n->def->f & T_VOID)) {
+                    if (n->taglen == 6 && n->tagpk == K6('s', 'c', 'r', 'i', 'p', 't'))
+                        raw = 1;
+                    else if (n->taglen == 5 && n->tagpk == K5('s', 't', 'y', 'l', 'e'))
+                        raw = 1;
+                }
+                if (raw) {
+                    char *re = raw_end(p, end, n->tag, n->taglen);
+                    add_text(p, re, n);
+                    char *close = memchr(re, '>', (size_t)(end - re));
+                    p = close ? close + 1 : end;
+                } else if (!sc && !(n->def->f & T_VOID)) {
                     GROW(stk, top + 1, scap, Node *);
                     stk[top++] = n;
                 }

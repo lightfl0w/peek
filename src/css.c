@@ -28,6 +28,7 @@ void ua_bold(Node *n) { st_push(n, &P_WEIGHT, "bold", -1); }
 
 static Rule *R;
 static int NR, RCAP;
+static void idx_build(void);
 
 void split_decls(char *s, char *e, Rule *r) {
     while (s < e && r->nd < 16) {
@@ -102,6 +103,68 @@ void parse_css(char *css) {
             q = c + 1;
         }
         pos = e + 1;
+    }
+    idx_build();
+}
+
+typedef struct { uint64_t k; int *r; int n, cap; } Bkt;
+static Bkt *BK;
+static int NBK, BCAP;
+static int *GEN;
+static int NGEN, GCAP;
+
+static void bkt_add(uint64_t k, int ri) {
+    for (int i = 0; i < NBK; i++)
+        if (BK[i].k == k) {
+            GROW(BK[i].r, BK[i].n, BK[i].cap, int);
+            BK[i].r[BK[i].n++] = ri;
+            return;
+        }
+    GROW(BK, NBK, BCAP, Bkt);
+    BK[NBK].k = k;
+    BK[NBK].r = 0;
+    BK[NBK].n = 0;
+    BK[NBK].cap = 0;
+    GROW(BK[NBK].r, BK[NBK].n, BK[NBK].cap, int);
+    BK[NBK].r[BK[NBK].n++] = ri;
+    NBK++;
+}
+
+static void gen_add(int ri) {
+    GROW(GEN, NGEN, GCAP, int);
+    GEN[NGEN++] = ri;
+}
+
+static int bkt_get(uint64_t k, int **out) {
+    for (int i = 0; i < NBK; i++)
+        if (BK[i].k == k) {
+            *out = BK[i].r;
+            return BK[i].n;
+        }
+    return 0;
+}
+
+static void idx_build(void) {
+    NBK = NGEN = 0;
+    for (int i = 0; i < NR; i++) {
+        Rule *r = R + i;
+        if (!r->np) continue;
+        const char *c = r->ps[r->np - 1];
+        if (*c == '#' || *c == '.') {
+            bkt_add((pk(c + 1) << 2) | (uint64_t)(*c == '.' ? 1 : 2), i);
+        } else if (*c == '[' || *c == ':' || *c == '*') {
+            gen_add(i);
+        } else {
+            char buf[64];
+            int j = 0;
+            while (c[j] && c[j] != '.' && c[j] != '#' && c[j] != '[' &&
+                   c[j] != ':' && j < 63) {
+                buf[j] = c[j];
+                j++;
+            }
+            buf[j] = 0;
+            bkt_add((pk(buf) << 2) | (uint64_t)0, i);
+        }
     }
 }
 
@@ -250,11 +313,54 @@ static void apply_decls(Rule *r, Node *n, int spec) {
     }
 }
 
+static int *CAND;
+static int NCAND, CCAP;
+
+static void cand_push(const int *r, int n) {
+    for (int i = 0; i < n; i++) {
+        int j = 0;
+        while (j < NCAND && CAND[j] != r[i]) j++;
+        if (j == NCAND) {
+            GROW(CAND, NCAND, CCAP, int);
+            CAND[NCAND++] = r[i];
+        }
+    }
+}
+
 void apply_styles(Node *n) {
     if (n->tag[0] != '#') {
-        for (int r = 0; r < NR; r++) {
-            int spec = match_selector(R + r, n);
-            if (spec >= 0) apply_decls(R + r, n, spec);
+        NCAND = 0;
+        int *rl;
+        int rn = bkt_get(n->tagpk << 2, &rl);
+        cand_push(rl, rn);
+        for (int i = 0; i < n->nattr; i++) {
+            if (pk(n->attrs[i].k) == K_CLASS) {
+                const char *cv = n->attrs[i].v;
+                char buf[64];
+                int bl = 0;
+                for (int ci = 0;; ci++) {
+                    char ch = cv[ci];
+                    if (ch && !ISWS(ch)) {
+                        if (bl < 63) buf[bl++] = ch;
+                        continue;
+                    }
+                    buf[bl] = 0;
+                    if (bl) {
+                        rn = bkt_get((pk(buf) << 2) | (uint64_t)1, &rl);
+                        cand_push(rl, rn);
+                    }
+                    bl = 0;
+                    if (!ch) break;
+                }
+            } else if (!strcmp(n->attrs[i].k, "id")) {
+                rn = bkt_get((pk(n->attrs[i].v) << 2) | (uint64_t)2, &rl);
+                cand_push(rl, rn);
+            }
+        }
+        cand_push(GEN, NGEN);
+        for (int i = 0; i < NCAND; i++) {
+            int spec = match_selector(R + CAND[i], n);
+            if (spec >= 0) apply_decls(R + CAND[i], n, spec);
         }
         for (int i = 0; i < n->nattr; i++)
             if (!strcmp(n->attrs[i].k, "style")) {

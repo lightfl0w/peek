@@ -38,13 +38,51 @@ const Tag TAGS[] = {
     {.name = "br", .f = T_VOID, .draw = d_br},
     {.name = "hr", .f = T_VOID | T_BLOCK, .draw = d_hr},
     {.name = "button", .draw = d_button},
+    {.name = "#comment", .f = T_HIDDEN},
 };
 
 const Tag TAG_ANY = {0};
 
+static const Tag *SI[sizeof TAGS / sizeof *TAGS];
+static uint64_t SK[sizeof TAGS / sizeof *TAGS];
+static uint8_t SL[sizeof TAGS / sizeof *TAGS];
+static int SN;
+
+static void idx_build(void) {
+    SN = (int)(sizeof TAGS / sizeof *TAGS);
+    for (int i = 0; i < SN; i++) {
+        SI[i] = TAGS + i;
+        SK[i] = pk(TAGS[i].name);
+        SL[i] = (uint8_t)strlen(TAGS[i].name);
+    }
+    for (int i = 1; i < SN; i++) {
+        const Tag *tv = SI[i];
+        uint64_t kv = SK[i];
+        uint8_t lv = SL[i];
+        int j = i - 1;
+        while (j >= 0 && (SK[j] > kv || (SK[j] == kv && SL[j] > lv))) {
+            SI[j + 1] = SI[j];
+            SK[j + 1] = SK[j];
+            SL[j + 1] = SL[j];
+            j--;
+        }
+        SI[j + 1] = tv;
+        SK[j + 1] = kv;
+        SL[j + 1] = lv;
+    }
+}
+
 const Tag *tag_find(const char *s) {
-    for (size_t i = 0; i < sizeof TAGS / sizeof *TAGS; i++)
-        if (!strcmp(TAGS[i].name, s)) return TAGS + i;
+    if (!SN) idx_build();
+    uint64_t k = pk(s);
+    uint8_t l = (uint8_t)strlen(s);
+    int lo = 0, hi = SN;
+    while (lo < hi) {
+        int m = (lo + hi) >> 1;
+        if (SK[m] < k || (SK[m] == k && SL[m] < l)) lo = m + 1;
+        else hi = m;
+    }
+    if (lo < SN && SK[lo] == k && SL[lo] == l) return SI[lo];
     return &TAG_ANY;
 }
 
@@ -63,6 +101,47 @@ Node *node(char *tag) {
     if (n->def->ua) n->def->ua(n);
     return n;
 }
+
+Node *text_node(const char *s, size_t n) {
+    Node *t = node(N_TEXT);
+    t->text = sdup(s, n);
+    t->tlen = (int)n;
+    return t;
+}
+
+static void detach(Node *c) {
+    Node *p = c->parent;
+    if (!p) { c->parent = 0; return; }
+    int i = 0;
+    while (i < p->nchild && p->child[i] != c) i++;
+    if (i < p->nchild) {
+        memmove(p->child + i, p->child + i + 1,
+                (size_t)(p->nchild - i - 1) * sizeof(Node *));
+        p->nchild--;
+    }
+    c->parent = 0;
+}
+
+void dom_append(Node *p, Node *c) {
+    detach(c);
+    c->parent = p;
+    push_child(p, c);
+}
+
+void dom_insert_before(Node *p, Node *c, Node *ref) {
+    detach(c);
+    int idx = p->nchild;
+    for (int i = 0; i < p->nchild; i++)
+        if (p->child[i] == ref) { idx = i; break; }
+    GROW(p->child, p->nchild + 1, p->ccap, Node *);
+    memmove(p->child + idx + 1, p->child + idx,
+            (size_t)(p->nchild - idx) * sizeof(Node *));
+    p->child[idx] = c;
+    p->nchild++;
+    c->parent = p;
+}
+
+void dom_remove(Node *c) { detach(c); }
 
 char *attr_get(Node *n, const char *k) {
     for (int i = 0; i < n->nattr; i++)

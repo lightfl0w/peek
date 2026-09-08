@@ -42,10 +42,11 @@ xmake run check
 - **乘移魔法数**：`(v * 1287 + 32896) >> 16` 代替 `(v + 25) / 51` 等全部除法；HSL 转 RGB 全程整数
 - **跳表**：色名、命名实体、属性分发均用 `switch(uint64_t)` 代替 if-else 链
 - **位运算**：空白判断位图、按钮 `flags` 位收集样式（1=bold 2=italic 4=underline 8=center 16=borderless）、`(80-len) >> 1` 居中
+- **DOM API 与事件循环**：补齐 createElement/createTextNode/createComment/appendChild/insertBefore/removeChild/parentNode/childNodes/className/id/classList/innerHTML/addEventListener（；setTimeout/setInterval/clearTimeout/requestAnimationFrame + Promise
 
 ## 已知限制
 
-- 输入上限 64KB（超出打印截断警告）；选择器段 8、每规则声明 16
+- 选择器段 8、每规则声明 16
 - 不自动补全 `<html>`/`<body>`——未写标签时 `body {}` 等选择器不生效
 - 伪类仅结构性 `:first-child`/`:last-child`；无 `:nth-child()`、`::before` 等内容生成
 - `rgba`/`hsla` 的 alpha 按暗背景混合近似，终端无真透明

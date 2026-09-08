@@ -1,8 +1,9 @@
 #include "peek.h"
 #include <termios.h>
 #include <unistd.h>
+#include <sys/select.h>
 
-static char BUF[1 << 16];
+static char *BUF;
 
 static struct termios SAVED;
 
@@ -16,8 +17,17 @@ static void raw_on(void) {
 
 static void raw_off(void) { tcsetattr(0, TCSANOW, &SAVED); }
 
-static int getkey(void) {
+static int getkey(int tmo) {
     unsigned char c;
+    if (tmo >= 0) {
+        fd_set rs;
+        struct timeval tv;
+        tv.tv_sec = tmo / 1000;
+        tv.tv_usec = (tmo % 1000) * 1000;
+        FD_ZERO(&rs);
+        FD_SET(0, &rs);
+        if (select(1, &rs, 0, 0, &tv) <= 0) return -2;
+    }
     if (read(0, &c, 1) != 1) return 'q';
     if (c != 27) return c;
     unsigned char b[2];
@@ -60,10 +70,14 @@ int main(int argc, char **argv) {
     if (argc < 2) return fprintf(stderr, "usage: %s <file.html>\n", argv[0]), 1;
     FILE *f = fopen(argv[1], "rb");
     if (!f) return perror(argv[1]), 1;
-    size_t len = fread(BUF, 1, sizeof BUF - 8, f);
+    fseek(f, 0, SEEK_END);
+    long flen = ftell(f);
+    if (flen < 0) return perror(argv[1]), 1;
+    fseek(f, 0, SEEK_SET);
+    BUF = malloc((size_t)flen + 9);
+    if (!BUF) oom();
+    size_t len = fread(BUF, 1, (size_t)flen, f);
     if (ferror(f)) return perror(argv[1]), 1;
-    if (!feof(f))
-        fprintf(stderr, "peek: warning: input truncated at %zu bytes\n", sizeof BUF - 8);
     BUF[len] = 0;
     fclose(f);
     fputs(CLEAR, stdout);
@@ -71,6 +85,7 @@ int main(int argc, char **argv) {
     DOM = dom;
     js_init();
     run_scripts(dom);
+    js_pump();
     static char NOCSS[1] = "";
     char *css = NOCSS;
     Node *st = find_tag(dom, K_STYLE);
@@ -81,6 +96,8 @@ int main(int argc, char **argv) {
     parse_css(css);
     apply_styles(dom);
     if (!isatty(0) || !isatty(1)) {
+        js_pump();
+        apply_styles(dom);
         render(dom);
         if (NLOG) putchar('\n');
         for (int i = 0; i < NLOG; i++) puts(LOGS[i]);
@@ -103,9 +120,14 @@ int main(int argc, char **argv) {
     show_alerts();
     hint();
     for (;;) {
-        int k = getkey();
+        double w = js_next_wait();
+        int tmo = w < 0 ? -1 : w < 1 ? 1 : (int)(w * 1000.0 + 0.5);
+        int acted = 0;
+        int k = getkey(tmo);
         if (k == 'q' || k == 3) break;
-        if (k == 1 || k == 2 || k == '\t') {
+        if (k == -2) {
+            acted = 1;
+        } else if (k == 1 || k == 2 || k == '\t') {
             if (NBTN) {
                 FOCI = k == 1 ? (FOCI + NBTN - 1) % NBTN : (FOCI + 1) % NBTN;
                 FOC = BTNS[FOCI];
@@ -113,9 +135,11 @@ int main(int argc, char **argv) {
         } else if (k == '\r' || k == '\n' || k == ' ') {
             if (NBTN) {
                 js_click(oc_find(BTNS[FOCI]));
-                apply_styles(dom);
+                acted = 1;
             }
         }
+        if (js_pump()) acted = 1;
+        if (acted) apply_styles(dom);
         frame();
         show_alerts();
         hint();
