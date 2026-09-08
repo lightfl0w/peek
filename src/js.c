@@ -266,14 +266,32 @@ void js_click(int i) {
     int nc = 0;
     for (int j = 0; j < NLS; j++)
         if (LS[j].n == n) cbs[nc++] = JS_DupValue(CTX, LS[j].cb);
+    JSValue g = JS_GetGlobalObject(CTX);
+    JSValue mk = JS_GetPropertyStr(CTX, g, "__mkevt");
+    JSValue ev = JS_UNDEFINED;
+    if (JS_IsFunction(CTX, mk)) {
+        JSValue el = mk_el(CTX, n);
+        JSValue args = el;
+        JSValue r = JS_Call(CTX, mk, JS_UNDEFINED, 1, &args);
+        JS_FreeValue(CTX, el);
+        if (JS_IsException(r)) {
+            js_pexc("<evt>");
+            JS_FreeValue(CTX, r);
+        } else {
+            ev = r;
+        }
+    }
+    JS_FreeValue(CTX, mk);
+    JS_FreeValue(CTX, g);
     for (int j = 0; j < nc; j++) {
         JSValue el = mk_el(CTX, n);
-        JSValue r = JS_Call(CTX, cbs[j], el, 0, 0);
+        JSValue r = JS_Call(CTX, cbs[j], el, 1, &ev);
         JS_FreeValue(CTX, el);
         if (JS_IsException(r)) js_pexc("<click>");
         JS_FreeValue(CTX, r);
         JS_FreeValue(CTX, cbs[j]);
     }
+    JS_FreeValue(CTX, ev);
     free(cbs);
 }
 
@@ -543,8 +561,21 @@ static const char BOOT[] =
     "Object.defineProperty(P,'onclick',"
     "{set:function(v){_oc(this,v)},get:function(){return _og(this)}});"
     "Object.defineProperty(P,'style',{get:function(){var el=this;return new Proxy(el,{"
-    "get:function(t,k){return typeof k=='symbol'?undefined:_sg(el,cc(k))},"
-    "set:function(t,k,v){if(typeof k!='symbol')_ss(el,cc(k),String(v));return true}})}});"
+    "get:function(t,k){if(typeof k=='symbol')return undefined;"
+    "if(k==='setProperty')return function(k,v,p){"
+    "_ss(el,cc(String(k)),v===undefined?'':String(v))};"
+    "if(k==='removeProperty')return function(k){_ss(el,cc(String(k)),'')};"
+    "if(k==='getPropertyValue')return function(k){return _sg(el,cc(String(k)))};"
+    "if(k==='getPropertyPriority')return function(){return ''};"
+    "if(k==='cssText'){var out='',i=0;var attrs=el.attributes;"
+    "for(i=0;i<attrs.length;i++)if(attrs[i].name==='style')out=attrs[i].value;return out}"
+    "return _sg(el,cc(k))},"
+    "set:function(t,k,v){if(typeof k!='symbol'){"
+    "if(k==='cssText'){"
+    "var parts=String(v).split(';');"
+    "for(var j=0;j<parts.length;j++){var pp=parts[j].indexOf(':');"
+    "if(pp>0)_ss(el,cc(parts[j].slice(0,pp).trim()),parts[j].slice(pp+1).trim())}"
+    "}else _ss(el,cc(k),String(v))}return true}})}});"
     "Object.defineProperty(P,'parentNode',{get:function(){return _pn(this)}});"
     "Object.defineProperty(P,'parentElement',{get:function(){return _pn(this)}});"
     "Object.defineProperty(P,'childNodes',{get:function(){return _cn(this)}});"
@@ -560,6 +591,7 @@ static const char BOOT[] =
     "P.insertBefore=function(c,r){return _ib(this,c,r===undefined||r===null?null:r)};"
     "P.removeChild=function(c){return _rc(this,c)};"
     "P.addEventListener=function(t,f){if(t=='click')_oal(this,f)};"
+    "P.removeEventListener=function(){};"
     "Object.defineProperty(P,'nodeType',{get:function(){return _nt(this)}});"
     "Object.defineProperty(P,'data',"
     "{get:function(){return _tg(this)},set:function(v){_ts(this,String(v))}});"
@@ -600,6 +632,13 @@ static const char BOOT[] =
     "globalThis.HTMLTemplateElement={};"
     "globalThis.HTMLTemplateElement[Symbol.hasInstance]=function(i){"
     "return i!=null&&i.tagName==='TEMPLATE'};"
+    "globalThis.SVGElement={};"
+    "globalThis.SVGElement[Symbol.hasInstance]=function(){return false};"
+    "globalThis.MathMLElement={};"
+    "globalThis.MathMLElement[Symbol.hasInstance]=function(){return false};"
+    "globalThis.Element={};"
+    "globalThis.Element[Symbol.hasInstance]=function(i){"
+    "return i!=null&&i.nodeType===1};"
     "globalThis.Text=function(s){return _ctn(s===undefined?'':String(s))};"
     "globalThis.Comment=function(s){return _ccm(s===undefined?'':String(s))};"
     "globalThis.queueMicrotask=function(f){Promise.resolve().then(f)};"
@@ -609,6 +648,10 @@ static const char BOOT[] =
     "globalThis.clearInterval=function(i){_ct(i)};"
     "globalThis.requestAnimationFrame=function(f){return _raf(f)};"
     "globalThis.document.createElement=function(t){return _ce(String(t))};"
+    "globalThis.document.createElementNS=function(ns,t){return _ce(String(t))};"
+    "globalThis.__mkevt=function(el){return {target:el,currentTarget:el,"
+    "type:'click',_vts:Date.now(),preventDefault:function(){},"
+    "stopPropagation:function(){},stopImmediatePropagation:function(){}}};"
     "globalThis.document.createTextNode=function(s){return _ctn(String(s))};"
     "globalThis.document.createComment=function(s){return _ccm(String(s))};"
     "})()";
@@ -624,6 +667,19 @@ void js_pexc(const char *where) {
     if (s) JS_FreeCString(CTX, s);
     JS_FreeValue(CTX, st);
     JS_FreeValue(CTX, e);
+}
+
+static JSValue j_merr(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
+    (void)thisv; (void)ac;
+    const char *m = JS_ToCString(ctx, av[0]);
+    fprintf(stderr, "js module: %s\n", m ? m : "(rejection)");
+    if (m) JS_FreeCString(ctx, m);
+    JSValue st = JS_GetPropertyStr(ctx, av[0], "stack");
+    const char *s = JS_ToCString(ctx, st);
+    if (s) fprintf(stderr, "%s\n", s);
+    if (s) JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, st);
+    return JS_UNDEFINED;
 }
 
 static char BASE[600] = ".";
@@ -708,11 +764,47 @@ static void eval_script(Node *n) {
         static int sn;
         snprintf(fn, sizeof fn, "<script#%d>", ++sn);
     }
-    int flags = ismod ? JS_EVAL_TYPE_MODULE : JS_EVAL_TYPE_GLOBAL;
-    JSValue r = JS_Eval(CTX, code, clen, fn, flags);
+    if (ismod) {
+        JSValue func = JS_Eval(CTX, code, clen, fn,
+                               JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+        if (JS_IsException(func)) {
+            js_pexc(fn);
+            free(code);
+            return;
+        }
+        if (JS_ResolveModule(CTX, func) < 0) {
+            js_pexc(fn);
+            JS_FreeValue(CTX, func);
+            free(code);
+            return;
+        }
+        JSValue res = JS_EvalFunction(CTX, func);
+        if (JS_IsException(res)) {
+            js_pexc(fn);
+        } else if (JS_IsObject(res)) {
+            JSValue then = JS_GetPropertyStr(CTX, res, "then");
+            if (JS_IsFunction(CTX, then)) {
+                JSValue g = JS_GetGlobalObject(CTX);
+                JSValue herr = JS_GetPropertyStr(CTX, g, "__merr");
+                if (JS_IsFunction(CTX, herr)) {
+                    JSValue args[2] = { JS_UNDEFINED, herr };
+                    JSValue r2 = JS_Call(CTX, then, res, 2, args);
+                    if (JS_IsException(r2)) js_pexc(fn);
+                    JS_FreeValue(CTX, r2);
+                }
+                JS_FreeValue(CTX, herr);
+                JS_FreeValue(CTX, g);
+            }
+            JS_FreeValue(CTX, then);
+        }
+        JS_FreeValue(CTX, res);
+        JS_FreeValue(CTX, res);
+    } else {
+        JSValue r = JS_Eval(CTX, code, clen, fn, JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(r)) js_pexc(fn);
+        JS_FreeValue(CTX, r);
+    }
     free(code);
-    if (JS_IsException(r)) js_pexc(fn);
-    JS_FreeValue(CTX, r);
 }
 
 static JSValue j_nt(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
@@ -893,6 +985,7 @@ void js_init(void) {
     JS_SetPropertyStr(CTX, g, "_raf", JS_NewCFunction(CTX, j_raf, "_raf", 1));
     JS_SetPropertyStr(CTX, g, "_ct", JS_NewCFunction(CTX, j_ct, "_ct", 1));
     JS_SetPropertyStr(CTX, g, "_nt", JS_NewCFunction(CTX, j_nt, "_nt", 1));
+    JS_SetPropertyStr(CTX, g, "__merr", JS_NewCFunction(CTX, j_merr, "__merr", 1));
     JS_SetPropertyStr(CTX, g, "_ra", JS_NewCFunction(CTX, j_ra, "_ra", 2));
     JS_SetPropertyStr(CTX, g, "_ha", JS_NewCFunction(CTX, j_ha, "_ha", 2));
     JS_SetPropertyStr(CTX, g, "_fc", JS_NewCFunction(CTX, j_fc, "_fc", 1));

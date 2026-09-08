@@ -1,0 +1,25 @@
+<html>
+<head>
+</head>
+<body>
+<div id="app">
+  <p>count: {{ count }}</p>
+  <button @click="inc">+1</button>
+  <ul>
+    <li v-for="i in items">{{ i }}</li>
+  </ul>
+  <p v-if="count >= 5">big</p>
+</div>
+<script type="module">
+import { createApp } from './vue.esm-browser.prod.js';
+createApp({
+  data() {
+    return { count: 3, items: ['alpha', 'beta', 'gamma'] };
+  },
+  methods: {
+    inc() { this.count++; }
+  }
+}).mount('#app');
+</script>
+</body>
+</html>

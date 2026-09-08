@@ -43,8 +43,9 @@ xmake run check
 - **跳表**：色名、命名实体、属性分发均用 `switch(uint64_t)` 代替 if-else 链
 - **位运算**：空白判断位图、按钮 `flags` 位收集样式（1=bold 2=italic 4=underline 8=center 16=borderless）、`(80-len) >> 1` 居中
 - **DOM API 与事件循环**：createElement/createTextNode/createComment/appendChild/insertBefore/removeChild/parentNode/parentElement/childNodes/firstChild/nextSibling/nextElementSibling/className/id/classList/innerHTML/attributes/cloneNode/remove/addEventListener（多监听器）/nodeType/data；template.content 返回 nodeType 11 的 fragment，Text/Comment/HTMLTemplateElement 构造器 shim；setTimeout/setInterval/clearTimeout/requestAnimationFrame + Promise
-- **外链脚本与模块**：`<script src>` 相对 HTML 所在目录解析；`type="module"` 走 JS_EVAL_TYPE_MODULE，JS_SetModuleLoaderFunc 支持本地 ESM 文件
-- **Vue 支持（petite-vue 验收通过）**
+- **外链脚本与模块**：`<script src>` 相对 HTML 所在目录解析；`type="module"` 走 COMPILE_ONLY + JS_ResolveModule + JS_EvalFunction；JS_SetModuleLoaderFunc 支持本地 ESM 文件
+- **Vue 3 支持**
+- **petite-vue 支持**
 
 ## 已知限制
 
