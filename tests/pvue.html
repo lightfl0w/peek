@@ -1,0 +1,21 @@
+<html><body>
+<script src="petite-vue.iife.js"></script>
+<div id="app" v-scope="Counter({ start: 3 })">
+  <p>count: {{ count }}</p>
+  <button @click="count++">inc</button>
+  <ul>
+    <li v-for="it in items">{{ it }}</li>
+  </ul>
+  <p v-if="count > 2">big</p>
+  <p v-show="false">hidden</p>
+</div>
+<script>
+petiteVue = PetiteVue
+PetiteVue.createApp({
+  Counter: (props) => ({
+    count: props.start,
+    items: ['alpha', 'beta', 'gamma']
+  })
+}).mount('#app')
+</script>
+</body></html>

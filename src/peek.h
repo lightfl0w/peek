@@ -91,6 +91,7 @@ struct Node {
     Node **child; int nchild, ccap;
     Node *parent;
     St *st; int nst, scap;
+    Node *frag;
 };
 
 enum { T_VOID = 1, T_BLOCK = 2, T_HIDDEN = 4, T_LIST = 8, T_TEXTN = 16 };
@@ -116,6 +117,7 @@ Node *parse_html(char *src);
 
 void js_init(void);
 void js_done(void);
+void js_set_base(const char *dir);
 void js_pexc(const char *where);
 void run_scripts(Node *n);
 JSValue mk_el(JSContext *ctx, Node *n);

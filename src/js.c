@@ -135,6 +135,12 @@ static JSValue j_ts(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av
     size_t vl;
     const char *v = JS_ToCStringLen(ctx, &vl, av[1]);
     if (!v) return JS_EXCEPTION;
+    if (n->def->f & T_TEXTN) {
+        n->text = sdup(v, vl);
+        n->tlen = (int)vl;
+        JS_FreeCString(ctx, v);
+        return JS_UNDEFINED;
+    }
     n->nchild = 0;
     Node *t = text_node(v, vl);
     t->parent = n;
@@ -540,6 +546,7 @@ static const char BOOT[] =
     "get:function(t,k){return typeof k=='symbol'?undefined:_sg(el,cc(k))},"
     "set:function(t,k,v){if(typeof k!='symbol')_ss(el,cc(k),String(v));return true}})}});"
     "Object.defineProperty(P,'parentNode',{get:function(){return _pn(this)}});"
+    "Object.defineProperty(P,'parentElement',{get:function(){return _pn(this)}});"
     "Object.defineProperty(P,'childNodes',{get:function(){return _cn(this)}});"
     "Object.defineProperty(P,'className',"
     "{get:function(){var v=this.getAttribute('class');return v==null?'':v},"
@@ -553,6 +560,20 @@ static const char BOOT[] =
     "P.insertBefore=function(c,r){return _ib(this,c,r===undefined||r===null?null:r)};"
     "P.removeChild=function(c){return _rc(this,c)};"
     "P.addEventListener=function(t,f){if(t=='click')_oal(this,f)};"
+    "Object.defineProperty(P,'nodeType',{get:function(){return _nt(this)}});"
+    "Object.defineProperty(P,'data',"
+    "{get:function(){return _tg(this)},set:function(v){_ts(this,String(v))}});"
+    "Object.defineProperty(P,'nodeValue',"
+    "{get:function(){return _tg(this)},set:function(v){_ts(this,String(v))}});"
+    "P.removeAttribute=function(k){_ra(this,k)};"
+    "P.hasAttribute=function(k){return _ha(this,k)};"
+    "Object.defineProperty(P,'firstChild',{get:function(){return _fc(this)}});"
+    "Object.defineProperty(P,'nextSibling',{get:function(){return _ns(this)}});"
+    "Object.defineProperty(P,'nextElementSibling',{get:function(){return _nes(this)}});"
+    "Object.defineProperty(P,'attributes',{get:function(){return _attrs(this)}});"
+    "Object.defineProperty(P,'content',{get:function(){return _content(this)}});"
+    "P.cloneNode=function(d){return _clone(this,d===undefined?1:d)};"
+    "P.remove=function(){if(this.parentNode)this.parentNode.removeChild(this)};"
     "Object.defineProperty(P,'classList',{get:function(){var el=this;return{"
     "contains:function(c){var v=el.getAttribute('class');"
     "return v!=null&&(' '+v+' ').indexOf(' '+c+' ')>=0},"
@@ -576,6 +597,11 @@ static const char BOOT[] =
     "Object.defineProperty(globalThis.document,'body',{get:function(){return _body()}});"
     "globalThis.window=globalThis;"
     "globalThis.navigator={userAgent:'peek'};"
+    "globalThis.HTMLTemplateElement={};"
+    "globalThis.HTMLTemplateElement[Symbol.hasInstance]=function(i){"
+    "return i!=null&&i.tagName==='TEMPLATE'};"
+    "globalThis.Text=function(s){return _ctn(s===undefined?'':String(s))};"
+    "globalThis.Comment=function(s){return _ccm(s===undefined?'':String(s))};"
     "globalThis.queueMicrotask=function(f){Promise.resolve().then(f)};"
     "globalThis.setTimeout=function(f,ms){return _sto(f,ms===undefined?0:ms)};"
     "globalThis.clearTimeout=function(i){_ct(i)};"
@@ -592,21 +618,230 @@ void js_pexc(const char *where) {
     const char *m = JS_ToCString(CTX, e);
     fprintf(stderr, "js %s: %s\n", where, m ? m : "(exception)");
     if (m) JS_FreeCString(CTX, m);
+    JSValue st = JS_GetPropertyStr(CTX, e, "stack");
+    const char *s = JS_ToCString(CTX, st);
+    if (s) fprintf(stderr, "%s\n", s);
+    if (s) JS_FreeCString(CTX, s);
+    JS_FreeValue(CTX, st);
     JS_FreeValue(CTX, e);
 }
 
-void run_scripts(Node *n) {
-    if (n->tagpk == K6('s', 'c', 'r', 'i', 'p', 't') && n->taglen == 6 && n->nchild &&
-        (n->child[0]->def->f & T_TEXTN) && n->child[0]->tlen) {
+static char BASE[600] = ".";
+
+void js_set_base(const char *dir) {
+    snprintf(BASE, sizeof BASE, "%s", dir);
+}
+
+static char *read_file(const char *path, size_t *out) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    if (n < 0) { fclose(f); return 0; }
+    fseek(f, 0, SEEK_SET);
+    char *b = malloc((size_t)n + 1);
+    if (!b) { fclose(f); oom(); }
+    size_t got = fread(b, 1, (size_t)n, f);
+    fclose(f);
+    b[got] = 0;
+    *out = got;
+    return b;
+}
+
+static char *js_path(const char *src) {
+    if (src[0] == '/') return sdup(src, strlen(src));
+    size_t bl = strlen(BASE), sl = strlen(src);
+    char *p = malloc(bl + sl + 2);
+    if (!p) oom();
+    memcpy(p, BASE, bl);
+    p[bl] = '/';
+    memcpy(p + bl + 1, src, sl + 1);
+    return p;
+}
+
+static JSModuleDef *js_module_loader(JSContext *ctx, const char *name, void *opaque) {
+    (void)opaque;
+    size_t len;
+    char *own = 0;
+    const char *path = name;
+    char *cand = js_path(name);
+    FILE *f = fopen(cand, "rb");
+    if (f) { fclose(f); path = cand; own = cand; }
+    else free(cand);
+    char *code = read_file(path, &len);
+    free(own);
+    if (!code) {
+        JS_ThrowReferenceError(ctx, "could not load module filename '%s'", name);
+        return 0;
+    }
+    JSValue func = JS_Eval(ctx, code, len, path,
+                           JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    free(code);
+    if (JS_IsException(func)) return 0;
+    JSModuleDef *m = JS_VALUE_GET_PTR(func);
+    JS_FreeValue(ctx, func);
+    return m;
+}
+
+static void eval_script(Node *n) {
+    char *src = attr_get(n, "src");
+    char *ty = attr_get(n, "type");
+    int ismod = ty && !strcmp(ty, "module");
+    char *code;
+    size_t clen;
+    char fn[640];
+    if (src) {
+        char *path = js_path(src);
+        code = read_file(path, &clen);
+        free(path);
+        if (!code) {
+            fprintf(stderr, "peek: cannot load script '%s'\n", src);
+            return;
+        }
+        snprintf(fn, sizeof fn, "<%s>", src);
+    } else {
+        if (!n->nchild || !(n->child[0]->def->f & T_TEXTN) || !n->child[0]->tlen)
+            return;
         Node *t = n->child[0];
+        code = sdup(t->text, (size_t)t->tlen);
+        clen = (size_t)t->tlen;
         static int sn;
-        char fn[24];
         snprintf(fn, sizeof fn, "<script#%d>", ++sn);
-        char *code = sdup(t->text, (size_t)t->tlen);
-        JSValue r = JS_Eval(CTX, code, t->tlen, fn, JS_EVAL_TYPE_GLOBAL);
-        free(code);
-        if (JS_IsException(r)) js_pexc(fn);
-        JS_FreeValue(CTX, r);
+    }
+    int flags = ismod ? JS_EVAL_TYPE_MODULE : JS_EVAL_TYPE_GLOBAL;
+    JSValue r = JS_Eval(CTX, code, clen, fn, flags);
+    free(code);
+    if (JS_IsException(r)) js_pexc(fn);
+    JS_FreeValue(CTX, r);
+}
+
+static JSValue j_nt(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
+    (void)thisv; (void)ac; (void)av;
+    Node *n = JS_GetOpaque(av[0], CLS);
+    if (!n) return JS_EXCEPTION;
+    if (n->def->f & T_TEXTN) return JS_NewInt32(ctx, 3);
+    if (!strcmp(n->tag, "#comment")) return JS_NewInt32(ctx, 8);
+    if (!strcmp(n->tag, "#fragment")) return JS_NewInt32(ctx, 11);
+    return JS_NewInt32(ctx, 1);
+}
+
+static JSValue j_ra(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
+    (void)thisv; (void)ac;
+    Node *n = JS_GetOpaque(av[0], CLS);
+    if (!n) return JS_EXCEPTION;
+    const char *k = JS_ToCString(ctx, av[1]);
+    if (!k) return JS_EXCEPTION;
+    for (int i = 0; i < n->nattr; i++)
+        if (!strcmp(n->attrs[i].k, k)) {
+            memmove(n->attrs + i, n->attrs + i + 1,
+                    (size_t)(n->nattr - i - 1) * sizeof(Attr));
+            n->nattr--;
+            break;
+        }
+    JS_FreeCString(ctx, k);
+    return JS_UNDEFINED;
+}
+
+static JSValue j_ha(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
+    (void)thisv; (void)ac;
+    Node *n = JS_GetOpaque(av[0], CLS);
+    if (!n) return JS_EXCEPTION;
+    const char *k = JS_ToCString(ctx, av[1]);
+    if (!k) return JS_EXCEPTION;
+    char *v = attr_get(n, k);
+    JS_FreeCString(ctx, k);
+    return JS_NewBool(ctx, v != 0);
+}
+
+static JSValue j_fc(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
+    (void)thisv; (void)ac; (void)av;
+    Node *n = JS_GetOpaque(av[0], CLS);
+    if (!n) return JS_EXCEPTION;
+    return n->nchild ? mk_el(ctx, n->child[0]) : JS_NULL;
+}
+
+static JSValue j_ns(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
+    (void)thisv; (void)ac; (void)av;
+    Node *n = JS_GetOpaque(av[0], CLS);
+    if (!n) return JS_EXCEPTION;
+    Node *p = n->parent;
+    if (!p) return JS_NULL;
+    for (int i = 0; i < p->nchild; i++)
+        if (p->child[i] == n) {
+            if (i + 1 < p->nchild) return mk_el(ctx, p->child[i + 1]);
+            return JS_NULL;
+        }
+    return JS_NULL;
+}
+
+static JSValue j_nes(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
+    (void)thisv; (void)ac; (void)av;
+    Node *n = JS_GetOpaque(av[0], CLS);
+    if (!n) return JS_EXCEPTION;
+    Node *p = n->parent;
+    if (!p) return JS_NULL;
+    int i = 0;
+    while (i < p->nchild && p->child[i] != n) i++;
+    for (i++; i < p->nchild; i++) {
+        Node *s = p->child[i];
+        if (!(s->def->f & T_TEXTN) && strcmp(s->tag, "#comment")) return mk_el(ctx, s);
+    }
+    return JS_NULL;
+}
+
+static JSValue j_attrs(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
+    (void)thisv; (void)ac; (void)av;
+    Node *n = JS_GetOpaque(av[0], CLS);
+    if (!n) return JS_EXCEPTION;
+    JSValue arr = JS_NewArray(ctx);
+    for (int i = 0; i < n->nattr; i++) {
+        JSValue o = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, o, "name", JS_NewString(ctx, n->attrs[i].k));
+        JS_SetPropertyStr(ctx, o, "value", JS_NewString(ctx, n->attrs[i].v));
+        JS_SetPropertyUint32(ctx, arr, i, o);
+    }
+    return arr;
+}
+
+static JSValue j_content(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
+    (void)thisv; (void)ac; (void)av;
+    Node *n = JS_GetOpaque(av[0], CLS);
+    if (!n) return JS_EXCEPTION;
+    if (!n->frag) {
+        Node *f = node(sdup("#fragment", 9));
+        while (n->nchild) dom_append(f, n->child[0]);
+        n->frag = f;
+    }
+    return mk_el(ctx, n->frag);
+}
+
+static Node *clone_node(Node *n, int deep) {
+    if (n->def->f & T_TEXTN) return text_node(n->text, (size_t)n->tlen);
+    Node *c = node(sdup(n->tag, strlen(n->tag)));
+    for (int i = 0; i < n->nattr; i++)
+        attr_set(c, n->attrs[i].k, n->attrs[i].v);
+    if (deep)
+        for (int i = 0; i < n->nchild; i++) {
+            Node *k = clone_node(n->child[i], 1);
+            k->parent = c;
+            push_child(c, k);
+        }
+    return c;
+}
+
+static JSValue j_clone(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
+    (void)thisv; (void)ac;
+    Node *n = JS_GetOpaque(av[0], CLS);
+    if (!n) return JS_EXCEPTION;
+    int32_t deep = 0;
+    if (ac > 1 && !JS_IsUndefined(av[1])) JS_ToInt32(ctx, &deep, av[1]);
+    return mk_el(ctx, clone_node(n, deep));
+}
+
+void run_scripts(Node *n) {
+    if (n->tagpk == K6('s', 'c', 'r', 'i', 'p', 't') && n->taglen == 6) {
+        eval_script(n);
+        return;
     }
     for (int i = 0; i < n->nchild; i++) run_scripts(n->child[i]);
 }
@@ -619,6 +854,7 @@ JSValue mk_el(JSContext *ctx, Node *n) {
 
 void js_init(void) {
     RT = JS_NewRuntime();
+    JS_SetModuleLoaderFunc(RT, 0, js_module_loader, 0);
     CTX = JS_NewContext(RT);
     JS_NewClassID(&CLS);
     static const JSClassDef ELDEF = {.class_name = "Element"};
@@ -656,6 +892,15 @@ void js_init(void) {
     JS_SetPropertyStr(CTX, g, "_siv", JS_NewCFunction(CTX, j_siv, "_siv", 2));
     JS_SetPropertyStr(CTX, g, "_raf", JS_NewCFunction(CTX, j_raf, "_raf", 1));
     JS_SetPropertyStr(CTX, g, "_ct", JS_NewCFunction(CTX, j_ct, "_ct", 1));
+    JS_SetPropertyStr(CTX, g, "_nt", JS_NewCFunction(CTX, j_nt, "_nt", 1));
+    JS_SetPropertyStr(CTX, g, "_ra", JS_NewCFunction(CTX, j_ra, "_ra", 2));
+    JS_SetPropertyStr(CTX, g, "_ha", JS_NewCFunction(CTX, j_ha, "_ha", 2));
+    JS_SetPropertyStr(CTX, g, "_fc", JS_NewCFunction(CTX, j_fc, "_fc", 1));
+    JS_SetPropertyStr(CTX, g, "_ns", JS_NewCFunction(CTX, j_ns, "_ns", 1));
+    JS_SetPropertyStr(CTX, g, "_nes", JS_NewCFunction(CTX, j_nes, "_nes", 1));
+    JS_SetPropertyStr(CTX, g, "_attrs", JS_NewCFunction(CTX, j_attrs, "_attrs", 1));
+    JS_SetPropertyStr(CTX, g, "_content", JS_NewCFunction(CTX, j_content, "_content", 1));
+    JS_SetPropertyStr(CTX, g, "_clone", JS_NewCFunction(CTX, j_clone, "_clone", 2));
     JS_SetPropertyStr(CTX, g, "_body", JS_NewCFunction(CTX, j_body, "_body", 0));
     JS_SetPropertyStr(CTX, g, "_proto", JS_NewCFunction(CTX, j_proto, "_proto", 0));
     JS_FreeValue(CTX, g);

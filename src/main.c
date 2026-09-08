@@ -84,6 +84,18 @@ int main(int argc, char **argv) {
     Node *dom = parse_html(BUF);
     DOM = dom;
     js_init();
+    const char *slash = strrchr(argv[1], '/');
+    if (slash && slash > argv[1]) {
+        size_t bl = (size_t)(slash - argv[1]);
+        char *bd = malloc(bl + 1);
+        if (!bd) oom();
+        memcpy(bd, argv[1], bl);
+        bd[bl] = 0;
+        js_set_base(bd);
+        free(bd);
+    } else if (slash) {
+        js_set_base("/");
+    }
     run_scripts(dom);
     js_pump();
     static char NOCSS[1] = "";

@@ -37,6 +37,20 @@ static void add_text(char *s, char *e, Node *parent) {
     *e = sv;
 }
 
+static char *tag_end(char *p, char *end) {
+    char q = 0;
+    for (char *s = p; s < end; s++) {
+        if (q) {
+            if (*s == q) q = 0;
+        } else if (*s == '"' || *s == '\'') {
+            q = *s;
+        } else if (*s == '>') {
+            return s;
+        }
+    }
+    return 0;
+}
+
 static char *raw_end(char *p, char *end, const char *name, int nl) {
     char *q = p;
     while (q < end) {
@@ -66,7 +80,7 @@ Node *parse_html(char *src) {
             add_text(p, e, stk[top - 1]);
             p = e;
         } else {
-            char *e = memchr(p, '>', (size_t)(end - p));
+            char *e = tag_end(p, end);
             if (!e) {
                 char *nx = p + 1 < end
                     ? memchr(p + 1, '<', (size_t)(end - p - 1))
