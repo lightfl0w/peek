@@ -107,6 +107,55 @@ static JSValue j_qsa(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *a
     return arr;
 }
 
+static JSValue j_qse(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
+    (void)ac;
+    Node *n = JS_GetOpaque(thisv, CLS);
+    if (!n) return JS_NULL;
+    size_t sl;
+    const char *s = JS_ToCStringLen(ctx, &sl, av[0]);
+    if (!s) return JS_EXCEPTION;
+    int c = qquery_at(n, s, sl);
+    JS_FreeCString(ctx, s);
+    return c ? mk_el(ctx, QL[0]) : JS_NULL;
+}
+
+static JSValue j_qsea(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
+    (void)ac;
+    Node *n = JS_GetOpaque(thisv, CLS);
+    JSValue arr = JS_NewArray(ctx);
+    if (!n) return arr;
+    size_t sl;
+    const char *s = JS_ToCStringLen(ctx, &sl, av[0]);
+    if (!s) return JS_EXCEPTION;
+    int c = qquery_at(n, s, sl);
+    JS_FreeCString(ctx, s);
+    for (int i = 0; i < c; i++) JS_SetPropertyUint32(ctx, arr, i, mk_el(ctx, QL[i]));
+    return arr;
+}
+
+static Node *dfsid(Node *n, const char *id) {
+    for (int i = 0; i < n->nchild; i++) {
+        Node *c = n->child[i];
+        if (c->tag[0] != '#') {
+            const char *v = attr_get(c, "id");
+            if (v && !strcmp(v, id)) return c;
+        }
+        Node *r = dfsid(c, id);
+        if (r) return r;
+    }
+    return 0;
+}
+
+static JSValue j_gid(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
+    (void)thisv; (void)ac;
+    size_t sl;
+    const char *s = JS_ToCStringLen(ctx, &sl, av[0]);
+    if (!s) return JS_EXCEPTION;
+    Node *n = dfsid(DOM, s);
+    JS_FreeCString(ctx, s);
+    return n ? mk_el(ctx, n) : JS_NULL;
+}
+
 static JSValue j_body(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
     (void)thisv; (void)ac; (void)av;
     Node *b = find_tag(DOM, K4('b', 'o', 'd', 'y'));
@@ -313,12 +362,87 @@ static JSValue j_og(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av
     return i >= 0 ? JS_DupValue(ctx, LS[i].cb) : JS_UNDEFINED;
 }
 
+typedef struct { Node *n; char *ty; JSValue cb; } LEv;
+static LEv *LE;
+static int NLE, LECAP;
+static void le_add(Node *n, const char *ty, JSValue cb);
+
 static JSValue j_oal(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
     (void)thisv; (void)ac;
     Node *n = JS_GetOpaque(av[0], CLS);
     if (!n) return JS_EXCEPTION;
-    if (!JS_IsFunction(ctx, av[1])) return JS_UNDEFINED;
-    ls_add(n, JS_DupValue(ctx, av[1]));
+    const char *t = JS_ToCString(ctx, av[1]);
+    if (!t) return JS_EXCEPTION;
+    if (!strcmp(t, "click")) {
+        if (JS_IsFunction(ctx, av[2])) ls_add(n, JS_DupValue(ctx, av[2]));
+    } else if (JS_IsFunction(ctx, av[2])) {
+        le_add(n, t, JS_DupValue(ctx, av[2]));
+    }
+    JS_FreeCString(ctx, t);
+    return JS_UNDEFINED;
+}
+
+static void le_add(Node *n, const char *ty, JSValue cb) {
+    GROW(LE, NLE + 1, LECAP, LEv);
+    LE[NLE].n = n;
+    LE[NLE].ty = sdup(ty, strlen(ty));
+    LE[NLE].cb = cb;
+    NLE++;
+}
+
+static void le_clear(Node *n, const char *ty) {
+    for (int i = 0; i < NLE; i++) {
+        if (LE[i].n == n && !strcmp(LE[i].ty, ty)) {
+            JS_FreeValue(CTX, LE[i].cb);
+            free(LE[i].ty);
+            LE[i] = LE[--NLE];
+            i--;
+        }
+    }
+}
+
+static int le_get(Node *n, const char *ty, JSValue *out) {
+    for (int i = 0; i < NLE; i++)
+        if (LE[i].n == n && !strcmp(LE[i].ty, ty)) {
+            *out = JS_DupValue(CTX, LE[i].cb);
+            return 1;
+        }
+    return 0;
+}
+
+static JSValue j_ol(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
+    (void)ac;
+    Node *n = JS_GetOpaque(av[0], CLS);
+    if (!n) return JS_EXCEPTION;
+    le_clear(n, "load");
+    if (JS_IsFunction(ctx, av[1])) le_add(n, "load", JS_DupValue(ctx, av[1]));
+    return JS_UNDEFINED;
+}
+
+static JSValue j_oe(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
+    (void)ac;
+    Node *n = JS_GetOpaque(av[0], CLS);
+    if (!n) return JS_EXCEPTION;
+    le_clear(n, "error");
+    if (JS_IsFunction(ctx, av[1])) le_add(n, "error", JS_DupValue(ctx, av[1]));
+    return JS_UNDEFINED;
+}
+
+static JSValue j_ogl(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
+    (void)thisv; (void)ac;
+    Node *n = JS_GetOpaque(av[0], CLS);
+    if (!n) return JS_EXCEPTION;
+    JSValue f;
+    if (le_get(n, "load", &f)) return f;
+    return JS_UNDEFINED;
+}
+
+static JSValue j_oge(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
+    (void)thisv; (void)ac;
+    Node *n = JS_GetOpaque(av[0], CLS);
+    if (!n) return JS_EXCEPTION;
+    JSValue f;
+    if (le_get(n, "error", &f)) return f;
     return JS_UNDEFINED;
 }
 
@@ -344,6 +468,7 @@ static JSValue j_ac(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av
     Node *p = JS_GetOpaque(av[0], CLS), *c = JS_GetOpaque(av[1], CLS);
     if (!p || !c) return JS_EXCEPTION;
     dom_append(p, c);
+    js_load_dyn(c);
     return JS_DupValue(ctx, av[1]);
 }
 
@@ -353,6 +478,7 @@ static JSValue j_ib(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av
     if (!p || !c) return JS_EXCEPTION;
     Node *ref = JS_IsObject(av[2]) ? JS_GetOpaque(av[2], CLS) : 0;
     dom_insert_before(p, c, ref);
+    js_load_dyn(c);
     return JS_DupValue(ctx, av[1]);
 }
 
@@ -532,7 +658,20 @@ int js_pump(void) {
             fired = 1;
         }
         JSContext *c1;
-        while (JS_ExecutePendingJob(RT, &c1) > 0) {}
+        while (JS_ExecutePendingJob(RT, &c1) > 0) {
+            JSValue ex = JS_GetException(c1);
+            if (!JS_IsNull(ex)) {
+                const char *m = JS_ToCString(CTX, ex);
+                fprintf(stderr, "js job: %s\n", m ? m : "(exception)");
+                if (m) JS_FreeCString(CTX, m);
+                JSValue st = JS_GetPropertyStr(CTX, ex, "stack");
+                const char *s = JS_ToCString(CTX, st);
+                if (s) fprintf(stderr, "%s\n", s);
+                if (s) JS_FreeCString(CTX, s);
+                JS_FreeValue(CTX, st);
+                JS_FreeValue(CTX, ex);
+            }
+        }
         total += fired;
         if (!fired) break;
     }
@@ -590,8 +729,35 @@ static const char BOOT[] =
     "P.appendChild=function(c){return _ac(this,c)};"
     "P.insertBefore=function(c,r){return _ib(this,c,r===undefined||r===null?null:r)};"
     "P.removeChild=function(c){return _rc(this,c)};"
-    "P.addEventListener=function(t,f){if(t=='click')_oal(this,f)};"
-    "P.removeEventListener=function(){};"
+    "P.addEventListener=function(t,f){_oal(this,t,f)};"
+    "P.removeEventListener=function(t,f){};"
+    "Object.defineProperty(P,'onload',{set:function(v){_ol(this,v)},"
+    "get:function(){return _ogl(this)}});"
+    "Object.defineProperty(P,'onerror',{set:function(v){_oe(this,v)},"
+    "get:function(){return _oge(this)}});"
+    "Object.defineProperty(P,'src',{set:function(v){this.setAttribute('src',String(v))},"
+    "get:function(){return this.getAttribute('src')}});"
+    "Object.defineProperty(P,'value',"
+    "{get:function(){var v=this.getAttribute('value');return v==null?'':v},"
+    "set:function(v){this.setAttribute('value',String(v))}});"
+    "Object.defineProperty(P,'href',{set:function(v){this.setAttribute('href',String(v))},"
+    "get:function(){return href_of(this)}});"
+    "function uurl(el){var v=el.getAttribute('href');"
+    "return v==null?null:uparts(v)};"
+    "Object.defineProperty(P,'protocol',{get:function(){var u=uurl(this);"
+    "return u?u.protocol.replace(/:$/,''):''}});"
+    "Object.defineProperty(P,'host',{get:function(){var u=uurl(this);"
+    "return u?u.host:''}});"
+    "Object.defineProperty(P,'hostname',{get:function(){var u=uurl(this);"
+    "return u?u.hostname:''}});"
+    "Object.defineProperty(P,'port',{get:function(){var u=uurl(this);"
+    "return u?u.port:''}});"
+    "Object.defineProperty(P,'pathname',{get:function(){var u=uurl(this);"
+    "return u?u.pathname:''}});"
+    "Object.defineProperty(P,'search',{get:function(){var u=uurl(this);"
+    "return u?u.search.replace(/^\\?/,''):''}});"
+    "Object.defineProperty(P,'hash',{get:function(){var u=uurl(this);"
+    "return u?u.hash.replace(/^#/,''):''}});"
     "Object.defineProperty(P,'nodeType',{get:function(){return _nt(this)}});"
     "Object.defineProperty(P,'data',"
     "{get:function(){return _tg(this)},set:function(v){_ts(this,String(v))}});"
@@ -620,23 +786,35 @@ static const char BOOT[] =
     "toggle:function(c){if(el.classList.contains(c))el.classList.remove(c);"
     "else el.classList.add(c)"
     "}}}});"
-    "globalThis.console={log:function(){var a=[];"
-    "for(var i=0;i<arguments.length;i++)a.push(String(arguments[i]));"
-    "_log(a.join(' '))}};"
+    "function clog(a){var s=[];"
+    "for(var i=0;i<a.length;i++)s.push(String(a[i]));"
+    "_log(s.join(' '))};"
+    "globalThis.console={};"
+    "var cfn=['log','error','warn','info','debug','dir','trace',"
+    "'group','groupCollapsed','groupEnd','clear','table','count',"
+    "'time','timeEnd','timeLog','assert','dirxml','profile','profileEnd'];"
+    "for(var ci=0;ci<cfn.length;ci++)"
+    "globalThis.console[cfn[ci]]=function(){clog(arguments)};"
     "globalThis.alert=function(m){_alert(String(m))};"
     "globalThis.document={querySelector:function(s){return _qs(s)},"
     "querySelectorAll:function(s){return _qsa(s)}};"
     "Object.defineProperty(globalThis.document,'body',{get:function(){return _body()}});"
     "globalThis.window=globalThis;"
+    "globalThis.self=globalThis;"
+    "globalThis.addEventListener=function(){};"
+    "globalThis.removeEventListener=function(){};"
     "globalThis.navigator={userAgent:'peek'};"
-    "globalThis.HTMLTemplateElement={};"
+    "globalThis.DOMException=function(m,n){var e=new Error(m===undefined?'':String(m));"
+    "e.name=n===undefined?'Error':String(n);return e};"
+    "globalThis.Element=function(){};"
+    "globalThis.SVGElement=function(){};"
+    "globalThis.MathMLElement=function(){};"
+    "globalThis.HTMLElement=function(){};"
+    "globalThis.HTMLTemplateElement=function(){};"
     "globalThis.HTMLTemplateElement[Symbol.hasInstance]=function(i){"
     "return i!=null&&i.tagName==='TEMPLATE'};"
-    "globalThis.SVGElement={};"
     "globalThis.SVGElement[Symbol.hasInstance]=function(){return false};"
-    "globalThis.MathMLElement={};"
     "globalThis.MathMLElement[Symbol.hasInstance]=function(){return false};"
-    "globalThis.Element={};"
     "globalThis.Element[Symbol.hasInstance]=function(i){"
     "return i!=null&&i.nodeType===1};"
     "globalThis.Text=function(s){return _ctn(s===undefined?'':String(s))};"
@@ -654,6 +832,179 @@ static const char BOOT[] =
     "stopPropagation:function(){},stopImmediatePropagation:function(){}}};"
     "globalThis.document.createTextNode=function(s){return _ctn(String(s))};"
     "globalThis.document.createComment=function(s){return _ccm(String(s))};"
+    "Object.defineProperty(globalThis.document,'documentElement',"
+    "{get:function(){return _qs('html')||_body()}});"
+    "Object.defineProperty(globalThis.document,'head',"
+    "{get:function(){return _qs('head')||_body()}});"
+    "globalThis.document.addEventListener=function(){};"
+    "globalThis.document.removeEventListener=function(){};"
+    "globalThis.document.getElementsByTagName=function(t){"
+    "return _qsa(String(t).toLowerCase())};"
+    "globalThis.document.getElementById=function(i){return _gid(String(i))};"
+    "globalThis.document.currentScript=null;"
+    "function mkst(){var S={},T={};"
+    "T.getItem=function(k){k=String(k);"
+    "return Object.prototype.hasOwnProperty.call(S,k)?S[k]:null};"
+    "T.setItem=function(k,v){S[String(k)]=String(v)};"
+    "T.removeItem=function(k){delete S[String(k)]};"
+    "T.clear=function(){S={}};"
+    "T.key=function(i){var ks=Object.keys(S);return i>=0&&i<ks.length?ks[i]:null};"
+    "Object.defineProperty(T,'length',{get:function(){return Object.keys(S).length}});"
+    "return new Proxy(T,{"
+    "get:function(t,k){if(typeof k=='symbol')return t[k];"
+    "if(k in t)return t[k];"
+    "return Object.prototype.hasOwnProperty.call(S,String(k))?S[String(k)]:null},"
+    "set:function(t,k,v){if(typeof k!='symbol')S[String(k)]=String(v);return true},"
+    "deleteProperty:function(t,k){delete S[String(k)];return true},"
+    "has:function(t,k){return k in t||Object.prototype.hasOwnProperty.call(S,String(k))},"
+    "ownKeys:function(){return Object.keys(S)"
+    ".concat(['getItem','setItem','removeItem','clear','key','length'])},"
+    "getOwnPropertyDescriptor:function(t,k){"
+    "if(Object.prototype.hasOwnProperty.call(S,String(k)))"
+    "return {configurable:true,enumerable:true,value:S[String(k)]};"
+    "return Object.getOwnPropertyDescriptor(t,k)}})};"
+    "globalThis.localStorage=mkst();"
+    "globalThis.sessionStorage=mkst();"
+    "var CK={};"
+    "Object.defineProperty(globalThis.document,'cookie',"
+    "{get:function(){var o=[];for(var k in CK)o.push(k+'='+CK[k]);"
+    "return o.join('; ')},"
+    "set:function(v){v=String(v);var ps=v.split(';');"
+    "var kv=ps[0],j=kv.indexOf('=');if(j<=0)return;"
+    "var k=kv.slice(0,j).trim(),val=kv.slice(j+1).trim(),del=false;"
+    "for(var i=1;i<ps.length;i++){var a=ps[i].trim().toLowerCase();"
+    "if(a.indexOf('expires=')===0){try{var d=new Date(ps[i].trim().slice(8));"
+    "if(d&&d.getTime()<Date.now())del=true}catch(e){}}"
+    "else if(a.indexOf('max-age=')===0){var t=parseInt(a.slice(8),10);"
+    "if(!(t>0))del=true}}"
+    "if(del)delete CK[k];else CK[k]=val}});"
+    "var SELN=null;"
+    "globalThis.getSelection=function(){"
+    "if(!SELN)SELN={_R:[],removeAllRanges:function(){this._R=[]},"
+    "addRange:function(r){this._R=[r]},"
+    "getRangeAt:function(i){return this._R[i]||{"
+    "selectNodeContents:function(){},collapse:function(){},"
+    "setStart:function(){},setEnd:function(){}}},"
+    "toString:function(){return ''}};"
+    "return SELN};"
+    "globalThis.document.createRange=function(){return {"
+    "selectNodeContents:function(){},collapse:function(){},"
+    "setStart:function(){},setEnd:function(){},"
+    "deleteContents:function(){},insertNode:function(){}}};"
+    "globalThis.document.execCommand=function(){return false};"
+    "var B=String(_base||''),UM=B.match(/^([a-zA-Z][a-zA-Z0-9+.-]*:)\\/\\/([^\\/?#]*)([^?#]*)(\\?[^#]*)?(#.*)?$/),"
+    "LO;if(UM){var HP=UM[2],CI=HP.lastIndexOf(':'),PN=UM[3]||'/';"
+    "LO={href:B,protocol:UM[1],host:HP,"
+    "hostname:CI>0?HP.slice(0,CI):HP,"
+    "port:CI>0&&HP.slice(CI+1)?HP.slice(CI+1):'',"
+    "origin:UM[1]+'//'+HP,pathname:PN,search:UM[4]||'',hash:UM[5]||''}}"
+    "else LO={href:'file://'+B,protocol:'file:',host:'',hostname:'',port:'',"
+    "origin:'null',pathname:B,search:'',hash:''};"
+    "LO.reload=function(){};LO.replace=function(){};LO.assign=function(){};"
+    "LO.toString=function(){return LO.href};"
+    "globalThis.location=LO;globalThis.document.location=LO;"
+    "function uparts(h){"
+    "var m=String(h).match(/^(?:([a-zA-Z][a-zA-Z0-9+.-]*):)?(?:(\\/\\/)([^\\/?#]*))?([^?#]*)(\\?[^#]*)?(#.*)?$/);"
+    "if(!m)return {protocol:LO.protocol,host:LO.host,hostname:LO.hostname,"
+    "port:LO.port,pathname:'/',search:'',hash:'',href:LO.href,origin:LO.origin};"
+    "var sch=m[1]||LO.protocol,rel=!!m[2],hh=m[3],pa=m[4]||'',se=m[5]||'',ha=m[6]||'';"
+    "if(rel){"
+    "if(pa===''){pa=LO.pathname;se=se||LO.search;ha=ha||LO.hash}"
+    "else if(pa.charAt(0)!=='/'&&pa.charAt(0)!=='?'){"
+    "var bp=LO.pathname||'/';"
+    "var dir=bp.slice(0,bp.lastIndexOf('/')+1)||'/';"
+    "var seg=(dir+pa).split('/'),out=[];"
+    "for(var i=0;i<seg.length;i++){var s=seg[i];"
+    "if(s==='.'||(s===''&&i<seg.length-1))continue;"
+    "if(s==='..'){out.pop()}else if(s!=='')out.push(s)}"
+    "pa=out.join('/');if(pa.charAt(0)!=='/')pa='/'+pa}}"
+    "else if(hh&&pa==='')pa='/';"
+    "var pi=hh?hh.lastIndexOf(':'):-1;"
+    "var hn=pi>0?hh.slice(0,pi):(hh||'');"
+    "var pt=pi>0&&hh.slice(pi+1)?hh.slice(pi+1):'';"
+    "var hp=hh?(pt?hn+':'+pt:hn):LO.host;"
+    "var abs=sch+(hp?'//'+hp:'')+pa+se+ha;"
+    "return {protocol:sch,host:hp,hostname:hn,port:pt,pathname:pa||'/',"
+    "search:se,hash:ha,href:abs,origin:sch+'//'+hp}};"
+    "function href_of(el){var v=el.getAttribute('href');"
+    "return v==null?'':uparts(v).href}"
+    "globalThis.history={length:1,state:null,scrollRestoration:'auto',"
+    "pushState:function(s){this.state=s||null},"
+    "replaceState:function(s){this.state=s||null},"
+    "back:function(){},forward:function(){},go:function(){}};"
+    "globalThis.TextEncoder=function(){"
+    "this.encoding='utf-8';"
+    "this.encode=function(s){s=s===undefined?'':String(s);"
+    "var b=unescape(encodeURIComponent(s)),a=new Uint8Array(b.length);"
+    "for(var i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return a}};"
+    "globalThis.TextDecoder=function(){"
+    "this.encoding='utf-8';"
+    "this.decode=function(u8){if(!u8)return '';"
+    "if(u8 instanceof ArrayBuffer)u8=new Uint8Array(u8);"
+    "if(u8 instanceof Uint8Array){var s='';"
+    "for(var i=0;i<u8.length;i++)s+=String.fromCharCode(u8[i]);"
+    "try{return decodeURIComponent(escape(s))}catch(e){return s}}"
+    "return String(u8)}};"
+    "function XHR(){this.readyState=0;this.status=0;this.statusText='';"
+    "this.response='';this.responseText='';this.responseType='';"
+    "this.responseXML=null;this.timeout=0;this.withCredentials=false;"
+    "this.onload=this.onerror=this.onabort=this.onreadystatechange=null;"
+    "this.upgrade=null;this._h={};this._hd={}}"
+    "XHR.prototype.open=function(m,u){this._m=String(m);this._u=String(u);"
+    "this.readyState=1};"
+    "XHR.prototype.setRequestHeader=function(k,v){this._hd[String(k)]=String(v)};"
+    "XHR.prototype.getAllResponseHeaders=function(){return ''};"
+    "XHR.prototype.getResponseHeader=function(){return null};"
+    "XHR.prototype.abort=function(){};"
+    "XHR.prototype.overrideMimeType=function(){};"
+    "XHR.prototype.addEventListener=function(t,f){"
+    "(this._h[t]=this._h[t]||[]).push(f)};"
+    "XHR.prototype.removeEventListener=function(t,f){var ls=this._h[t];"
+    "if(ls){var i=ls.indexOf(f);if(i>=0)ls.splice(i,1)}};"
+    "XHR.prototype.send=function(b){var self=this;"
+    "var r=_http(self._m,self._u,"
+    "b===undefined||b===null?null:String(b));"
+    "self.readyState=4;"
+    "self.status=r.status;"
+    "self.statusText=r.ok?'OK':'';"
+    "self.responseText=self.response=r.body;"
+    "self.responseURL=self._u;"
+    "Promise.resolve().then(function(){"
+    "var ev={target:self,type:'load',loaded:1,total:1,timeStamp:Date.now()};"
+    "if(self.onreadystatechange)self.onreadystatechange(ev);"
+    "var ls=self._h.readystatechange;"
+    "if(ls)for(var i=0;i<ls.length;i++)ls[i](ev);"
+    "if(r.ok){if(self.onload)self.onload(ev);"
+    "var ls2=self._h.load;"
+    "if(ls2)for(var j=0;j<ls2.length;j++)ls2[j](ev)}"
+    "else{ev.type='error';"
+    "if(self.onerror)self.onerror(ev);"
+    "var ls3=self._h.error;"
+    "if(ls3)for(var k=0;k<ls3.length;k++)ls3[k](ev)}})};"
+    "globalThis.XMLHttpRequest=XHR;"
+    "globalThis.fetch=function(u,o){o=o||{};"
+    "return new Promise(function(res,rej){"
+    "var r=_http(String(o.method||'GET'),String(u),"
+    "o.body===undefined||o.body===null?null:String(o.body));"
+    "if(!r.ok){rej(new TypeError('Failed to fetch'));return}"
+    "res({ok:true,status:r.status,statusText:'OK',url:String(u),"
+    "headers:{get:function(){return null},has:function(){return false},"
+    "forEach:function(){}},"
+    "text:function(){return Promise.resolve(r.body)},"
+    "json:function(){try{return Promise.resolve(JSON.parse(r.body))}"
+    "catch(e){return Promise.reject(e)}}})})};"
+    "globalThis.MessageChannel=function(){"
+    "function P(){this.onmessage=null;this._h={}}"
+    "P.prototype.postMessage=function(m){var p=this._peer;"
+    "Promise.resolve().then(function(){"
+    "if(p.onmessage)p.onmessage({data:m});"
+    "var ls=p._h.message;if(ls)for(var i=0;i<ls.length;i++)ls[i]({data:m})})};"
+    "P.prototype.addEventListener=function(t,f){(this._h[t]=this._h[t]||[]).push(f)};"
+    "P.prototype.removeEventListener=function(t,f){var ls=this._h[t];if(ls){"
+    "var i=ls.indexOf(f);if(i>=0)ls.splice(i,1)}};"
+    "P.prototype.start=function(){};P.prototype.close=function(){};"
+    "var a=new P(),b=new P();a._peer=b;b._peer=a;"
+    "this.port1=a;this.port2=b};"
     "})()";
 
 void js_pexc(const char *where) {
@@ -715,22 +1066,67 @@ static char *js_path(const char *src) {
     return p;
 }
 
+static JSValue j_http(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
+    (void)thisv; (void)ac;
+    const char *m = JS_ToCString(ctx, av[0]);
+    const char *u = JS_ToCString(ctx, av[1]);
+    const char *bd = 0;
+    if (!JS_IsUndefined(av[2]) && !JS_IsNull(av[2])) bd = JS_ToCString(ctx, av[2]);
+    if (!m || !u) {
+        if (m) JS_FreeCString(ctx, m);
+        if (u) JS_FreeCString(ctx, u);
+        return JS_EXCEPTION;
+    }
+    char ub[2048];
+    snprintf(ub, sizeof ub, "%s", u);
+    JS_FreeCString(ctx, u);
+    if (!url_is(ub) && url_is(BASE)) {
+        char *j = url_join(BASE, ub);
+        snprintf(ub, sizeof ub, "%s", j);
+        free(j);
+    }
+    size_t bl = 0;
+    int code = 0;
+    char *b = http_req(m, ub, bd, &bl, &code);
+    JS_FreeCString(ctx, m);
+    if (bd) JS_FreeCString(ctx, bd);
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "status", JS_NewInt32(ctx, code));
+    JS_SetPropertyStr(ctx, obj, "ok", JS_NewBool(ctx, code >= 200 && code < 300));
+    JS_SetPropertyStr(ctx, obj, "body",
+                      JS_NewStringLen(ctx, b ? b : "", b ? bl : 0));
+    if (b) free(b);
+    return obj;
+}
+
+static char *load_src(const char *src, size_t *out) {
+    char ub[2048];
+    if (url_is(BASE)) {
+        char *u = url_join(BASE, src);
+        snprintf(ub, sizeof ub, "%s", u);
+        free(u);
+        return http_get(ub, out);
+    }
+    snprintf(ub, sizeof ub, "%s", src);
+    if (url_is(ub)) return http_get(ub, out);
+    char *cand = js_path(src);
+    FILE *f = fopen(cand, "rb");
+    if (f) fclose(f);
+    else { free(cand); cand = sdup(src, strlen(src)); }
+    char *b = read_file(cand, out);
+    free(cand);
+    return b;
+}
+
 static JSModuleDef *js_module_loader(JSContext *ctx, const char *name, void *opaque) {
     (void)opaque;
     size_t len;
-    char *own = 0;
-    const char *path = name;
-    char *cand = js_path(name);
-    FILE *f = fopen(cand, "rb");
-    if (f) { fclose(f); path = cand; own = cand; }
-    else free(cand);
-    char *code = read_file(path, &len);
-    free(own);
+    char *code = load_src(name, &len);
     if (!code) {
         JS_ThrowReferenceError(ctx, "could not load module filename '%s'", name);
         return 0;
     }
-    JSValue func = JS_Eval(ctx, code, len, path,
+    JSValue func = JS_Eval(ctx, code, len, name,
                            JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
     free(code);
     if (JS_IsException(func)) return 0;
@@ -747,9 +1143,7 @@ static void eval_script(Node *n) {
     size_t clen;
     char fn[640];
     if (src) {
-        char *path = js_path(src);
-        code = read_file(path, &clen);
-        free(path);
+        code = load_src(src, &clen);
         if (!code) {
             fprintf(stderr, "peek: cannot load script '%s'\n", src);
             return;
@@ -805,6 +1199,47 @@ static void eval_script(Node *n) {
         JS_FreeValue(CTX, r);
     }
     free(code);
+}
+
+static void le_fire(Node *n, const char *ty) {
+    for (int i = 0; i < NLE; i++) {
+        if (LE[i].n != n || strcmp(LE[i].ty, ty)) continue;
+        JSValue cb = JS_DupValue(CTX, LE[i].cb);
+        JSValue r = JS_Call(CTX, cb, JS_UNDEFINED, 0, 0);
+        if (JS_IsException(r)) js_pexc("<load>");
+        JS_FreeValue(CTX, r);
+        JS_FreeValue(CTX, cb);
+    }
+}
+
+void js_load_dyn(Node *n) {
+    static Node **DSN;
+    static int NDS, DSCAP;
+    int is_script = !strcmp(n->tag, "script");
+    int is_link = !strcmp(n->tag, "link");
+    if (!is_script && !is_link) return;
+    for (int i = 0; i < NDS; i++)
+        if (DSN[i] == n) return;
+    GROW(DSN, NDS + 1, DSCAP, Node *);
+    DSN[NDS++] = n;
+    const char *u = attr_get(n, "src");
+    if (!u && is_link) u = attr_get(n, "href");
+    if (!u) return;
+    size_t clen;
+    char *code = load_src(u, &clen);
+    if (!code) {
+        le_fire(n, "error");
+        return;
+    }
+    if (is_script) {
+        char fn[640];
+        snprintf(fn, sizeof fn, "<%s>", u);
+        JSValue r = JS_Eval(CTX, code, clen, fn, JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(r)) js_pexc(fn);
+        JS_FreeValue(CTX, r);
+    }
+    free(code);
+    le_fire(n, "load");
 }
 
 static JSValue j_nt(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av) {
@@ -938,13 +1373,38 @@ void run_scripts(Node *n) {
     for (int i = 0; i < n->nchild; i++) run_scripts(n->child[i]);
 }
 
+typedef struct { Node *n; JSValue v; } ElWrap;
+static ElWrap *ELW;
+static int NELW, ELCAP;
+
 JSValue mk_el(JSContext *ctx, Node *n) {
+    for (int i = 0; i < NELW; i++)
+        if (ELW[i].n == n) return JS_DupValue(ctx, ELW[i].v);
     JSValue o = JS_NewObjectProtoClass(ctx, ELPROTO, CLS);
     JS_SetOpaque(o, n);
+    GROW(ELW, NELW, ELCAP, ElWrap);
+    ELW[NELW].n = n;
+    ELW[NELW].v = JS_DupValue(ctx, o);
+    NELW++;
     return o;
 }
 
+void js_fire(Node *n, const char *ty) {
+    if (!CTX || !n) return;
+    JSValue cb;
+    if (!le_get(n, ty, &cb)) return;
+    JSValue ev = JS_NewObject(CTX);
+    JS_SetPropertyStr(CTX, ev, "target", mk_el(CTX, n));
+    JS_SetPropertyStr(CTX, ev, "type", JS_NewString(CTX, ty));
+    JSValue r = JS_Call(CTX, cb, JS_UNDEFINED, 1, &ev);
+    if (JS_IsException(r)) js_pexc("event");
+    JS_FreeValue(CTX, r);
+    JS_FreeValue(CTX, ev);
+    JS_FreeValue(CTX, cb);
+}
+
 void js_init(void) {
+    NELW = 0;
     RT = JS_NewRuntime();
     JS_SetModuleLoaderFunc(RT, 0, js_module_loader, 0);
     CTX = JS_NewContext(RT);
@@ -957,9 +1417,16 @@ void js_init(void) {
         JS_NewCFunction(CTX, j_ga, "getAttribute", 1));
     JS_SetPropertyStr(CTX, ELPROTO, "setAttribute",
         JS_NewCFunction(CTX, j_sa, "setAttribute", 2));
+    JS_SetPropertyStr(CTX, ELPROTO, "querySelector",
+        JS_NewCFunction(CTX, j_qse, "querySelector", 1));
+    JS_SetPropertyStr(CTX, ELPROTO, "querySelectorAll",
+        JS_NewCFunction(CTX, j_qsea, "querySelectorAll", 1));
     JSValue g = JS_GetGlobalObject(CTX);
     JS_SetPropertyStr(CTX, g, "_qs", JS_NewCFunction(CTX, j_qs, "_qs", 1));
     JS_SetPropertyStr(CTX, g, "_qsa", JS_NewCFunction(CTX, j_qsa, "_qsa", 1));
+    JS_SetPropertyStr(CTX, g, "_qse", JS_NewCFunction(CTX, j_qse, "_qse", 2));
+    JS_SetPropertyStr(CTX, g, "_qsea", JS_NewCFunction(CTX, j_qsea, "_qsea", 2));
+    JS_SetPropertyStr(CTX, g, "_gid", JS_NewCFunction(CTX, j_gid, "_gid", 1));
     JS_SetPropertyStr(CTX, g, "_tg", JS_NewCFunction(CTX, j_tg, "_tg", 1));
     JS_SetPropertyStr(CTX, g, "_ts", JS_NewCFunction(CTX, j_ts, "_ts", 2));
     JS_SetPropertyStr(CTX, g, "_sg", JS_NewCFunction(CTX, j_sg, "_sg", 2));
@@ -969,7 +1436,11 @@ void js_init(void) {
     JS_SetPropertyStr(CTX, g, "_alert", JS_NewCFunction(CTX, j_alert, "_alert", 1));
     JS_SetPropertyStr(CTX, g, "_oc", JS_NewCFunction(CTX, j_oc, "_oc", 2));
     JS_SetPropertyStr(CTX, g, "_og", JS_NewCFunction(CTX, j_og, "_og", 1));
-    JS_SetPropertyStr(CTX, g, "_oal", JS_NewCFunction(CTX, j_oal, "_oal", 2));
+    JS_SetPropertyStr(CTX, g, "_oal", JS_NewCFunction(CTX, j_oal, "_oal", 3));
+    JS_SetPropertyStr(CTX, g, "_ol", JS_NewCFunction(CTX, j_ol, "_ol", 2));
+    JS_SetPropertyStr(CTX, g, "_ogl", JS_NewCFunction(CTX, j_ogl, "_ogl", 1));
+    JS_SetPropertyStr(CTX, g, "_oe", JS_NewCFunction(CTX, j_oe, "_oe", 2));
+    JS_SetPropertyStr(CTX, g, "_oge", JS_NewCFunction(CTX, j_oge, "_oge", 1));
     JS_SetPropertyStr(CTX, g, "_pn", JS_NewCFunction(CTX, j_pn, "_pn", 1));
     JS_SetPropertyStr(CTX, g, "_cn", JS_NewCFunction(CTX, j_cn, "_cn", 1));
     JS_SetPropertyStr(CTX, g, "_ac", JS_NewCFunction(CTX, j_ac, "_ac", 2));
@@ -996,6 +1467,8 @@ void js_init(void) {
     JS_SetPropertyStr(CTX, g, "_clone", JS_NewCFunction(CTX, j_clone, "_clone", 2));
     JS_SetPropertyStr(CTX, g, "_body", JS_NewCFunction(CTX, j_body, "_body", 0));
     JS_SetPropertyStr(CTX, g, "_proto", JS_NewCFunction(CTX, j_proto, "_proto", 0));
+    JS_SetPropertyStr(CTX, g, "_base", JS_NewString(CTX, BASE));
+    JS_SetPropertyStr(CTX, g, "_http", JS_NewCFunction(CTX, j_http, "_http", 3));
     JS_FreeValue(CTX, g);
     JSValue r = JS_Eval(CTX, BOOT, sizeof BOOT - 1, "<boot>", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(r)) js_pexc("<boot>");

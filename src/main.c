@@ -3,8 +3,6 @@
 #include <unistd.h>
 #include <sys/select.h>
 
-static char *BUF;
-
 static struct termios SAVED;
 
 static void raw_on(void) {
@@ -60,71 +58,134 @@ static void show_alerts(void) {
 
 static void hint(void) {
     if (NBTN)
-        fputs("\x1b[90m[\xe2\x86\x91\xe2\x86\x93/Tab] \xe9\x80\x89\xe6\x8b\xa9  [Enter] \xe7\x82\xb9\xe5\x87\xbb  [q] \xe9\x80\x80\xe5\x87\xba\x1b[0m\n", stdout);
+        fputs("\x1b[90m[\xe2\x86\x91\xe2\x86\x93/Tab] \xe9\x80\x89\xe6\x8b\xa9  [Enter] \xe6\x89\x93\xe5\xbc\x80/\xe7\x82\xb9\xe5\x87\xbb  [b] \xe5\x90\x8e\xe9\x80\x80  [q] \xe9\x80\x80\xe5\x87\xba\x1b[0m\n", stdout);
     else
         fputs("\x1b[90m[q] \xe9\x80\x80\xe5\x87\xba\x1b[0m\n", stdout);
     fflush(stdout);
 }
 
-int main(int argc, char **argv) {
-    if (argc < 2) return fprintf(stderr, "usage: %s <file.html>\n", argv[0]), 1;
-    FILE *f = fopen(argv[1], "rb");
-    if (!f) return perror(argv[1]), 1;
+static char *CURURL;
+static char *HIST[32];
+static int NH, JSUP;
+
+static char *rf(const char *p, size_t *n) {
+    FILE *f = fopen(p, "rb");
+    if (!f) { perror(p); return 0; }
     fseek(f, 0, SEEK_END);
-    long flen = ftell(f);
-    if (flen < 0) return perror(argv[1]), 1;
+    long fl = ftell(f);
+    if (fl < 0) { fclose(f); perror(p); return 0; }
     fseek(f, 0, SEEK_SET);
-    BUF = malloc((size_t)flen + 9);
-    if (!BUF) oom();
-    size_t len = fread(BUF, 1, (size_t)flen, f);
-    if (ferror(f)) return perror(argv[1]), 1;
-    BUF[len] = 0;
+    char *b = malloc((size_t)fl + 9);
+    if (!b) { fclose(f); oom(); }
+    size_t got = fread(b, 1, (size_t)fl, f);
+    if (ferror(f)) { fclose(f); free(b); perror(p); return 0; }
     fclose(f);
-    fputs(CLEAR, stdout);
-    Node *dom = parse_html(BUF);
-    DOM = dom;
-    js_init();
-    const char *slash = strrchr(argv[1], '/');
-    if (slash && slash > argv[1]) {
-        size_t bl = (size_t)(slash - argv[1]);
-        char *bd = malloc(bl + 1);
-        if (!bd) oom();
-        memcpy(bd, argv[1], bl);
-        bd[bl] = 0;
-        js_set_base(bd);
-        free(bd);
-    } else if (slash) {
-        js_set_base("/");
-    }
-    run_scripts(dom);
+    b[got] = 0;
+    *n = got;
+    return b;
+}
+
+static void base_local(const char *p) {
+    const char *s = strrchr(p, '/');
+    if (!s) { js_set_base("."); return; }
+    if (s == p) { js_set_base("/"); return; }
+    char *d = sdup(p, (size_t)(s - p));
+    js_set_base(d);
+    free(d);
+}
+
+static int load_page(const char *u) {
+    char ub[2048];
+    snprintf(ub, sizeof ub, "%s", u);
+    int url = url_is(ub);
+    size_t len = 0;
+    char *body = url ? http_get(ub, &len) : rf(ub, &len);
+    if (!body) return 0;
+    free(BTNS);
+    BTNS = 0;
+    NBTN = FOCI = 0;
+    FOC = 0;
+    for (int i = 0; i < NLOG; i++) free(LOGS[i]);
+    for (int i = 0; i < NAL; i++) free(ALERTS[i]);
+    NLOG = NAL = 0;
+    ASEEN = 0;
+    if (url) js_set_base(ub);
+    else base_local(ub);
+    if (JSUP) { js_done(); js_init(); }
+    else { js_init(); JSUP = 1; }
+    css_reset();
+    DOM = parse_html(body);
+    run_scripts(DOM);
     js_pump();
     static char NOCSS[1] = "";
     char *css = NOCSS;
-    Node *st = find_tag(dom, K_STYLE);
+    Node *st = find_tag(DOM, K_STYLE);
     if (st && st->nchild && (st->child[0]->def->f & T_TEXTN)) {
         Node *t = st->child[0];
         css = t->text, t->text[t->tlen] = 0;
     }
     parse_css(css);
-    apply_styles(dom);
+    apply_styles(DOM);
+    qquery("button,a[href]", sizeof "button,a[href]" - 1);
+    NBTN = NQL;
+    if (NQL) {
+        BTNS = malloc((size_t)NQL * sizeof *BTNS);
+        if (!BTNS) oom();
+        memcpy(BTNS, QL, (size_t)NQL * sizeof *BTNS);
+        FOC = BTNS[0];
+    }
+    free(CURURL);
+    CURURL = sdup(ub, strlen(ub));
+    return 1;
+}
+
+static void nav(const char *href) {
+    if (!*href || *href == '#') return;
+    char *u;
+    if (url_is(href)) u = sdup(href, strlen(href));
+    else if (url_is(CURURL)) u = url_join(CURURL, href);
+    else {
+        const char *s = strrchr(CURURL, '/');
+        size_t dl = s && s > CURURL ? (size_t)(s - CURURL) : 1;
+        u = malloc(dl + strlen(href) + 2);
+        if (!u) oom();
+        if (s && s > CURURL) memcpy(u, CURURL, dl);
+        else *u = '.';
+        u[dl] = '/';
+        memcpy(u + dl + 1, href, strlen(href) + 1);
+    }
+    if (NH == 32) {
+        free(HIST[0]);
+        memmove(HIST, HIST + 1, 31 * sizeof *HIST);
+        NH = 31;
+    }
+    HIST[NH++] = sdup(CURURL, strlen(CURURL));
+    if (!load_page(u)) free(HIST[--NH]);
+    free(u);
+}
+
+static void back(void) {
+    if (!NH) return;
+    char *u = HIST[--NH];
+    load_page(u);
+    free(u);
+}
+
+int main(int argc, char **argv) {
+    if (argc < 2) return fprintf(stderr, "usage: %s <file.html|url>\n", argv[0]), 1;
+    if (!load_page(argv[1])) return 1;
     if (!isatty(0) || !isatty(1)) {
+        FOC = 0;
+        fputs(CLEAR, stdout);
         js_pump();
-        apply_styles(dom);
-        render(dom);
+        apply_styles(DOM);
+        render(DOM);
         if (NLOG) putchar('\n');
         for (int i = 0; i < NLOG; i++) puts(LOGS[i]);
         if (NAL) putchar('\n');
         for (int i = 0; i < NAL; i++) draw_dialog(ALERTS[i]);
         js_done();
         return 0;
-    }
-    qquery("button", 6);
-    NBTN = NQL;
-    if (NBTN) {
-        BTNS = malloc((size_t)NQL * sizeof *BTNS);
-        if (!BTNS) oom();
-        memcpy(BTNS, QL, (size_t)NQL * sizeof *BTNS);
-        FOC = BTNS[0];
     }
     raw_on();
     fputs("\x1b[?25l", stdout);
@@ -146,12 +207,16 @@ int main(int argc, char **argv) {
             }
         } else if (k == '\r' || k == '\n' || k == ' ') {
             if (NBTN) {
-                js_click(oc_find(BTNS[FOCI]));
-                acted = 1;
+                Node *f = BTNS[FOCI];
+                char *href = f->taglen == 1 && f->tagpk == K_A ? attr_get(f, "href") : 0;
+                if (href) { nav(href); acted = 1; }
+                else { js_click(oc_find(BTNS[FOCI])); acted = 1; }
             }
+        } else if (k == 'b' || k == 127 || k == 8) {
+            if (NH) { back(); acted = 1; }
         }
         if (js_pump()) acted = 1;
-        if (acted) apply_styles(dom);
+        if (acted) apply_styles(DOM);
         frame();
         show_alerts();
         hint();

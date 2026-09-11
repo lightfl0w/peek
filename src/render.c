@@ -186,6 +186,7 @@ void render(Node *n) {
             }
             if (cx > 0) { printf("%*s", cx, ""); COL += cx; }
             emit_styles(p, 0);
+            if (p == FOC) fputs("\x1b[7m", stdout);
             put_text(n->text, n->tlen);
             fputs(RESET, stdout);
         }

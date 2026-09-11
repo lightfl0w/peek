@@ -38,7 +38,9 @@ const Tag TAGS[] = {
     {.name = "br", .f = T_VOID, .draw = d_br},
     {.name = "hr", .f = T_VOID | T_BLOCK, .draw = d_hr},
     {.name = "button", .draw = d_button},
+    {.name = "a", .ua = ua_link},
     {.name = "template", .f = T_HIDDEN},
+    {.name = "noscript", .f = T_HIDDEN},
     {.name = "#comment", .f = T_HIDDEN},
 };
 

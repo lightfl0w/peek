@@ -7,6 +7,7 @@ static void parse_attrs(char *s, Node *n) {
         char *k = s, *v = "";
         while (*s && !ISWS(*s) && *s != '=') s++;
         char *ke = s;
+        for (char *q = k; q < ke; q++) *q = (char)tolower((unsigned char)*q);
         if (*s == '=') {
             *s++ = 0;
             char q = 0;
@@ -80,6 +81,11 @@ Node *parse_html(char *src) {
             add_text(p, e, stk[top - 1]);
             p = e;
         } else {
+            if (p + 4 <= end && !strncmp(p + 1, "!--", 3)) {
+                char *c = strstr(p + 2, "-->");
+                p = c ? c + 3 : end;
+                continue;
+            }
             char *e = tag_end(p, end);
             if (!e) {
                 char *nx = p + 1 < end
@@ -92,17 +98,17 @@ Node *parse_html(char *src) {
             }
             char *t = cut(p + 1, e);
             p = e + 1;
-            if (!strncmp(t, "!--", 3)) {
-                char *c = strstr(p, "-->");
-                p = c ? c + 3 : end;
-            } else if (*t == '!') {
+            if (*t == '!') {
             } else if (*t == '/') {
+                for (char *q = t + 1; *q; q++) *q = (char)tolower((unsigned char)*q);
                 while (top > 1 && stk[top - 1]->tagpk != pk(t + 1)) top--;
                 if (top > 1) top--;
             } else if (*t) {
                 int sc = t[strlen(t) - 1] == '/';
                 if (sc) t[strlen(t) - 1] = 0;
                 char *sp = strchr(t, ' ');
+                char *te = sp ? sp : t + strlen(t);
+                for (char *q = t; q < te; q++) *q = (char)tolower((unsigned char)*q);
                 Node *n = node(sp ? cut(t, sp) : t);
                 if (sp) parse_attrs(sp + 1, n);
                 n->parent = stk[top - 1];

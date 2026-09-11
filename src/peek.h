@@ -26,6 +26,7 @@
 #define K_CLASS K5('c', 'l', 'a', 's', 's')
 #define K_ID K2('i', 'd')
 #define K_STYLE K5('s', 't', 'y', 'l', 'e')
+#define K_A K1('a')
 
 void oom(void);
 #define GROW(a, n, cap, type) do { \
@@ -66,12 +67,14 @@ extern int NBTN, FOCI;
 
 extern const Prop
     P_COLOR, P_BG, P_WEIGHT, P_FS, P_DECO, P_ALIGN,
-    P_TRANS, P_PAD, P_WIDTH, P_BORDER, P_DISPLAY;
+    P_TRANS, P_PAD, P_WIDTH, P_BORDER, P_FSIZE, P_MARGIN, P_DISPLAY;
 const Prop *prop_find(const char *k);
 void ua_bold(Node *n);
+void ua_link(Node *n);
 typedef struct { const Prop *p; const char *v; } Decl;
 typedef struct { const char *ps[8]; uint8_t sep[9], np; Decl d[16]; int nd; } Rule;
 void parse_css(char *css);
+void css_reset(void);
 void presplit(Rule *r, char *sel);
 void split_decls(char *s, char *e, Rule *r);
 int match_selector(const Rule *r, Node *n);
@@ -79,6 +82,7 @@ void apply_styles(Node *n);
 extern Node **QL;
 extern int NQL;
 int qquery(const char *sel, size_t sl);
+int qquery_at(Node *root, const char *sel, size_t sl);
 
 typedef struct Attr { char *k, *v; } Attr;
 typedef struct { const Prop *p; const char *v; int spec; } St;
@@ -115,12 +119,19 @@ Node *find_tag(Node *n, uint64_t k);
 
 Node *parse_html(char *src);
 
+int url_is(const char *);
+char *url_join(const char *, const char *);
+char *http_get(char *, size_t *);
+char *http_req(const char *method, const char *url, const char *body, size_t *, int *);
+
 void js_init(void);
 void js_done(void);
 void js_set_base(const char *dir);
 void js_pexc(const char *where);
 void run_scripts(Node *n);
+void js_load_dyn(Node *n);
 JSValue mk_el(JSContext *ctx, Node *n);
+void js_fire(Node *n, const char *ty);
 int oc_find(Node *n);
 void js_click(int i);
 int js_pump(void);

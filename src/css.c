@@ -11,11 +11,13 @@ const Prop
     P_PAD = {"padding", 0, e_pad},
     P_WIDTH = {"width", 0, e_width},
     P_BORDER = {"border", 0, e_border},
+    P_FSIZE = {"font-size", P_INH, 0},
+    P_MARGIN = {"margin", 0, 0},
     P_DISPLAY = {"display", 0, 0};
 
 static const Prop *const PROPS[] = {
     &P_COLOR, &P_BG, &P_WEIGHT, &P_FS, &P_DECO, &P_ALIGN,
-    &P_TRANS, &P_PAD, &P_WIDTH, &P_BORDER, &P_DISPLAY,
+    &P_TRANS, &P_PAD, &P_WIDTH, &P_BORDER, &P_FSIZE, &P_MARGIN, &P_DISPLAY,
 };
 
 const Prop *prop_find(const char *k) {
@@ -26,9 +28,16 @@ const Prop *prop_find(const char *k) {
 
 void ua_bold(Node *n) { st_push(n, &P_WEIGHT, "bold", -1); }
 
+void ua_link(Node *n) {
+    st_push(n, &P_COLOR, "blue", -1);
+    st_push(n, &P_DECO, "underline", -1);
+}
+
 static Rule *R;
 static int NR, RCAP;
 static void idx_build(void);
+
+void css_reset(void) { NR = 0; }
 
 void split_decls(char *s, char *e, Rule *r) {
     while (s < e && r->nd < 16) {
@@ -402,7 +411,7 @@ static void qsel(Node *n, Rule *r) {
     }
 }
 
-int qquery(const char *sel, size_t sl) {
+int qquery_at(Node *root, const char *sel, size_t sl) {
     NQL = 0;
     char *tmp = sdup(sel, sl);
     char *p = tmp;
@@ -413,10 +422,14 @@ int qquery(const char *sel, size_t sl) {
         if (*seg) {
             Rule r = {0};
             presplit(&r, seg);
-            qsel(DOM, &r);
+            qsel(root, &r);
         }
         p = cm ? cm + 1 : 0;
     }
     free(tmp);
     return NQL;
+}
+
+int qquery(const char *sel, size_t sl) {
+    return qquery_at(DOM, sel, sl);
 }
