@@ -13,11 +13,24 @@ const Prop
     P_BORDER = {"border", 0, e_border},
     P_FSIZE = {"font-size", P_INH, 0},
     P_MARGIN = {"margin", 0, 0},
-    P_DISPLAY = {"display", 0, 0};
+    P_DISPLAY = {"display", 0, 0},
+    P_BW = {"border-width", 0, 0},
+    P_RADIUS = {"border-radius", 0, 0},
+    P_MINW = {"min-width", 0, 0},
+    P_LH = {"line-height", P_INH, 0},
+    P_POS = {"position", 0, 0},
+    P_TOP = {"top", 0, 0},
+    P_LEFT = {"left", 0, 0},
+    P_GAP = {"gap", 0, 0},
+    P_JUST = {"justify-content", 0, 0},
+    P_DIR = {"flex-direction", 0, 0},
+    P_AI = {"align-items", 0, 0};
 
 static const Prop *const PROPS[] = {
     &P_COLOR, &P_BG, &P_WEIGHT, &P_FS, &P_DECO, &P_ALIGN,
     &P_TRANS, &P_PAD, &P_WIDTH, &P_BORDER, &P_FSIZE, &P_MARGIN, &P_DISPLAY,
+    &P_BW, &P_RADIUS, &P_MINW, &P_LH, &P_POS, &P_TOP, &P_LEFT,
+    &P_GAP, &P_JUST, &P_DIR, &P_AI,
 };
 
 const Prop *prop_find(const char *k) {
@@ -47,8 +60,17 @@ void split_decls(char *s, char *e, Rule *r) {
         if (c) {
             const Prop *p = prop_find(cut(s, c));
             if (p) {
+                char *vv = cut(c + 1, de);
+                char *im = strstr(vv, "!important");
+                uint8_t flag = 0;
+                if (im) {
+                    flag = 1;
+                    *im = 0;
+                    while (im > vv && ISWS(im[-1])) *--im = 0;
+                }
                 r->d[r->nd].p = p;
-                r->d[r->nd].v = cut(c + 1, de);
+                r->d[r->nd].v = vv;
+                r->d[r->nd].imp = flag;
                 r->nd++;
             }
         }
@@ -312,12 +334,13 @@ int match_selector(const Rule *r, Node *n) {
 static void apply_decls(Rule *r, Node *n, int spec) {
     for (int i = 0; i < r->nd; i++) {
         const Prop *p = r->d[i].p;
+        int sp = r->d[i].imp ? (1 << 20) + (spec & 0xffff) : spec;
         int j = 0;
         while (j < n->nst && n->st[j].p != p) j++;
-        if (j == n->nst) st_push(n, p, r->d[i].v, spec);
-        else if (!n->st[j].v || spec >= n->st[j].spec) {
+        if (j == n->nst) st_push(n, p, r->d[i].v, sp);
+        else if (!n->st[j].v || sp >= n->st[j].spec) {
             n->st[j].v = r->d[i].v;
-            n->st[j].spec = spec;
+            n->st[j].spec = sp;
         }
     }
 }

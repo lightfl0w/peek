@@ -67,11 +67,13 @@ extern int NBTN, FOCI;
 
 extern const Prop
     P_COLOR, P_BG, P_WEIGHT, P_FS, P_DECO, P_ALIGN,
-    P_TRANS, P_PAD, P_WIDTH, P_BORDER, P_FSIZE, P_MARGIN, P_DISPLAY;
+    P_TRANS, P_PAD, P_WIDTH, P_BORDER, P_FSIZE, P_MARGIN, P_DISPLAY,
+    P_BW, P_RADIUS, P_MINW, P_LH, P_POS, P_TOP, P_LEFT,
+    P_GAP, P_JUST, P_DIR, P_AI;
 const Prop *prop_find(const char *k);
 void ua_bold(Node *n);
 void ua_link(Node *n);
-typedef struct { const Prop *p; const char *v; } Decl;
+typedef struct { const Prop *p; const char *v; uint8_t imp; } Decl;
 typedef struct { const char *ps[8]; uint8_t sep[9], np; Decl d[16]; int nd; } Rule;
 void parse_css(char *css);
 void css_reset(void);

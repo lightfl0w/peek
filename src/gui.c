@@ -3,8 +3,8 @@
 
 typedef struct {
     GdkRGBA col, bg;
-    double fsz;
-    int bold, ital, und, strike, up, lo, center;
+    double fsz, lh;
+    int bold, ital, und, strike, up, lo, center, right, just;
     int fszset, bgset, pad, wid, mt, ms, mauto;
 } FS;
 
@@ -14,7 +14,7 @@ typedef struct {
     FS fs;
 } Para;
 
-static GtkWidget *WIN, *CONTENT, *ENTRY, *CANVAS;
+static GtkWidget *WIN, *CONTENT, *ENTRY, *CANVAS, *OVER;
 static Node *FOCN;
 static int FOCP;
 static GtkWidget *REFCUS;
@@ -90,6 +90,142 @@ static double css_px(const char *v, double base) {
     return x;
 }
 
+static void box4(const char *v, int *t, int *r, int *b, int *l, int *la, double base) {
+    *t = *r = *b = *l = 0;
+    *la = 0;
+    if (!v || !*v) return;
+    char tmp[128];
+    snprintf(tmp, sizeof tmp, "%s", v);
+    char *tok[4] = {0};
+    int nt = 0;
+    for (char *p = strtok(tmp, " \t"); p && nt < 4; p = strtok(0, " \t"))
+        tok[nt++] = p;
+    if (!nt) return;
+    int vals[4];
+    for (int i = 0; i < 4; i++) {
+        const char *s = nt == 1 ? tok[0]
+                      : nt == 2 ? tok[i < 2 ? 0 : 1]
+                      : nt == 3 ? tok[i == 0 ? 0 : i == 3 ? 2 : 1]
+                      : tok[i];
+        if (!strcmp(s, "auto")) vals[i] = -1;
+        else vals[i] = (int)css_px(s, base);
+    }
+    *t = vals[0];
+    *r = vals[1];
+    *b = vals[2];
+    *l = vals[3];
+    if (nt == 2) {
+        *b = vals[0];
+        *l = vals[1];
+    }
+    if (nt == 3) *l = *r = vals[1];
+    *la = *l == -1 || *r == -1;
+}
+
+typedef struct {
+    int w, hascol, hasst;
+    GdkRGBA col;
+    char st[10];
+} Brd;
+
+static void brd_parse(const char *v, Brd *o) {
+    memset(o, 0, sizeof *o);
+    o->w = -1;
+    if (!v || !*v) return;
+    char tmp[128];
+    snprintf(tmp, sizeof tmp, "%s", v);
+    for (char *p = strtok(tmp, " \t"); p; p = strtok(0, " \t")) {
+        if ((p[0] >= '0' && p[0] <= '9') && o->w < 0) {
+            o->w = (int)css_px(p, 0);
+            continue;
+        }
+        if (!strcmp(p, "solid") || !strcmp(p, "dashed") || !strcmp(p, "dotted") ||
+            !strcmp(p, "double") || !strcmp(p, "none")) {
+            snprintf(o->st, sizeof o->st, "%s", p);
+            o->hasst = 1;
+            continue;
+        }
+        GdkRGBA c;
+        if (css_rgb(p, &c)) {
+            o->col = c;
+            o->hascol = 1;
+        }
+    }
+    if (o->w < 0) o->w = 1;
+    if (!o->hasst) strcpy(o->st, "solid");
+    if (!o->hascol) o->col.red = o->col.green = o->col.blue = 0.75, o->col.alpha = 1;
+}
+
+static void widget_css(GtkWidget *w, const char *body) {
+    if (!body || !*body) return;
+    char css[512];
+    snprintf(css, sizeof css, "* { %s }", body);
+    GtkCssProvider *p = gtk_css_provider_new();
+    if (gtk_css_provider_load_from_data(p, css, -1, 0)) {
+        gtk_style_context_add_provider(gtk_widget_get_style_context(w),
+                                       GTK_STYLE_PROVIDER(p),
+                                       GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    }
+    g_object_unref(p);
+}
+
+static void rgba_css(GdkRGBA *c, char *out, size_t n) {
+    snprintf(out, n, "rgba(%d,%d,%d,%g)", (int)(c->red * 255), (int)(c->green * 255),
+             (int)(c->blue * 255), c->alpha);
+}
+
+static void apply_box(Node *n, GtkWidget *w, double base) {
+    const char *v;
+    int t, r, b, l, la;
+    if ((v = st_find(n, &P_MARGIN))) {
+        box4(v, &t, &r, &b, &l, &la, 800);
+        if (t > 0) gtk_widget_set_margin_top(w, t);
+        if (b > 0) gtk_widget_set_margin_bottom(w, b);
+        if (l > 0) gtk_widget_set_margin_start(w, l);
+        if (r > 0) gtk_widget_set_margin_end(w, r);
+        if (la) gtk_widget_set_halign(w, GTK_ALIGN_CENTER);
+    }
+    if ((v = st_find(n, &P_MINW))) {
+        int m = (int)css_px(v, 800);
+        if (m > 0) {
+            int cw, ch;
+            gtk_widget_get_size_request(w, &cw, &ch);
+            gtk_widget_set_size_request(w, m, ch);
+        }
+    }
+    GString *cs = g_string_new(0);
+    if ((v = st_find(n, &P_PAD))) {
+        box4(v, &t, &r, &b, &l, &la, 800);
+        g_string_append_printf(cs, "padding:%dpx %dpx %dpx %dpx;", t, r, b, l);
+    }
+    Brd bd;
+    int hasbd = 0;
+    if ((v = st_find(n, &P_BORDER))) {
+        brd_parse(v, &bd);
+        if (strcmp(bd.st, "none")) hasbd = 1;
+    } else if ((v = st_find(n, &P_BW))) {
+        int bw = (int)css_px(v, 0);
+        if (bw > 0) {
+            bd.w = bw;
+            strcpy(bd.st, "solid");
+            bd.col.red = bd.col.green = bd.col.blue = 0.75;
+            bd.col.alpha = 1;
+            hasbd = 1;
+        }
+    }
+    if (hasbd) {
+        char colb[32];
+        rgba_css(&bd.col, colb, sizeof colb);
+        g_string_append_printf(cs, "border:%dpx %s %s;", bd.w, bd.st, colb);
+    }
+    if ((v = st_find(n, &P_RADIUS))) {
+        double rd = css_px(v, 0);
+        if (rd > 0) g_string_append_printf(cs, "border-radius:%gpx;", rd);
+    }
+    if (cs->len) widget_css(w, cs->str);
+    g_string_free(cs, TRUE);
+}
+
 static void apply_fs(Node *n, FS *s) {
     const char *v;
     GdkRGBA c;
@@ -109,7 +245,15 @@ static void apply_fs(Node *n, FS *s) {
         if (strstr(v, "uppercase")) s->up = 1, s->lo = 0;
         if (strstr(v, "lowercase")) s->lo = 1, s->up = 0;
     }
-    if ((v = st_find(n, &P_ALIGN)) && strstr(v, "center")) s->center = 1;
+    if ((v = st_find(n, &P_ALIGN))) {
+        if (strstr(v, "center")) s->center = 1;
+        else if (strstr(v, "right") || strstr(v, "end")) s->right = 1;
+        else if (strstr(v, "justify")) s->just = 1;
+    }
+    if ((v = st_find(n, &P_LH))) {
+        double x = strtod(v, 0);
+        if (*v && x > 0) s->lh = strchr(v, 'p') ? x / s->fsz : x;
+    }
     if ((v = st_find(n, &P_PAD))) s->pad = (int)css_px(v, s->fsz);
     if ((v = st_find(n, &P_WIDTH))) s->wid = (int)css_px(v, 0);
     if ((v = st_find(n, &P_MARGIN))) {
@@ -170,12 +314,21 @@ static void ptext(Para *P) {
         return;
     }
     GtkWidget *l = gtk_label_new(NULL);
+    if (P->fs.lh > 0.01) {
+        char pre[40];
+        snprintf(pre, sizeof pre, "<span line_height=\"%g\">", P->fs.lh);
+        g_string_prepend(P->m, pre);
+        g_string_append(P->m, "</span>");
+    }
     gtk_label_set_markup(GTK_LABEL(l), P->m->str);
     gtk_label_set_selectable(GTK_LABEL(l), TRUE);
-    gtk_label_set_xalign(GTK_LABEL(l), P->fs.center ? 0.5 : 0);
+    gtk_label_set_xalign(GTK_LABEL(l), P->fs.center ? 0.5 : P->fs.right ? 1 : 0);
     gtk_label_set_line_wrap(GTK_LABEL(l), TRUE);
     gtk_label_set_line_wrap_mode(GTK_LABEL(l), PANGO_WRAP_WORD_CHAR);
-    gtk_widget_set_halign(l, P->fs.center ? GTK_ALIGN_CENTER : GTK_ALIGN_FILL);
+    if (P->fs.just) gtk_label_set_justify(GTK_LABEL(l), GTK_JUSTIFY_FILL);
+    gtk_widget_set_halign(l, P->fs.center ? GTK_ALIGN_CENTER
+                            : P->fs.right ? GTK_ALIGN_END
+                            : GTK_ALIGN_FILL);
     g_signal_connect(l, "activate-link", G_CALLBACK(nav_link), 0);
     gtk_box_pack_start(P->box, l, FALSE, FALSE, 0);
     g_string_free(P->m, TRUE);
@@ -518,11 +671,25 @@ static void build_tag(Node *n, GtkBox *box, int depth) {
         base.bold = 1;
         if (!st_find(n, &P_FSIZE)) base.fsz = HS[n->tag[1] - '1'];
     }
-    GtkBox *v = GTK_BOX(vbox(6));
-    if (tl == 10 && !memcmp(n->tag, "blockquote", 10))
-        gtk_widget_set_margin_start(GTK_WIDGET(v), 28);
+    const char *posv = st_find(n, &P_POS);
+    int abspos = posv && !strcmp(posv, "absolute") && OVER;
+    int relpos = posv && !strcmp(posv, "relative");
+    const char *disp = st_find(n, &P_DISPLAY);
+    int flexh = 0;
+    if (disp && (!strcmp(disp, "flex") || !strcmp(disp, "inline-flex"))) {
+        const char *dv = st_find(n, &P_DIR);
+        flexh = !(dv && strstr(dv, "column"));
+    }
+    double gapv = 0;
+    const char *gv = st_find(n, &P_GAP);
+    if (gv) gapv = css_px(gv, 0);
+    GtkBox *v = GTK_BOX(flexh ? gtk_box_new(GTK_ORIENTATION_HORIZONTAL, (gint)gapv)
+                              : vbox(6));
+    int ms2 = tl == 10 && !memcmp(n->tag, "blockquote", 10) ? 28 : base.ms;
     GtkWidget *host = GTK_WIDGET(v);
-    if (base.bgset || base.pad || base.wid) {
+    if (base.bgset || base.pad || base.wid ||
+        st_find(n, &P_PAD) || st_find(n, &P_BORDER) || st_find(n, &P_BW) ||
+        st_find(n, &P_RADIUS)) {
         GtkWidget *ev = gtk_event_box_new();
         if (base.bgset) gtk_widget_override_background_color(ev, GTK_STATE_FLAG_NORMAL, &base.bg);
         if (base.pad) gtk_container_set_border_width(GTK_CONTAINER(ev), (guint)base.pad);
@@ -530,17 +697,54 @@ static void build_tag(Node *n, GtkBox *box, int depth) {
         gtk_container_add(GTK_CONTAINER(ev), GTK_WIDGET(v));
         host = ev;
     }
-    if (base.mt || base.ms || base.mauto) {
-        gtk_widget_set_margin_top(host, base.mt);
-        gtk_widget_set_margin_bottom(host, base.mt);
-        if (base.mauto) gtk_widget_set_halign(host, GTK_ALIGN_CENTER);
-        else if (base.ms) {
-            gtk_widget_set_margin_start(host, base.ms);
-            gtk_widget_set_margin_end(host, base.ms);
+    apply_box(n, host, base.fsz);
+    int justsb = 0;
+    if (flexh) {
+        const char *jv = st_find(n, &P_JUST);
+        if (jv) {
+            if (strstr(jv, "space")) justsb = 1;
+            else if (strstr(jv, "flex-end") || strstr(jv, "end"))
+                gtk_widget_set_halign(host, GTK_ALIGN_END);
+            else if (strstr(jv, "center"))
+                gtk_widget_set_halign(host, GTK_ALIGN_CENTER);
         }
+        const char *av = st_find(n, &P_AI);
+        if (av && strstr(av, "center")) gtk_widget_set_valign(host, GTK_ALIGN_CENTER);
     }
-    gtk_box_pack_start(box, host, FALSE, FALSE, 0);
+    if (relpos) {
+        const char *tv = st_find(n, &P_TOP);
+        const char *lv = st_find(n, &P_LEFT);
+        if (tv) base.mt += (int)css_px(tv, 0);
+        if (lv) ms2 += (int)css_px(lv, 0);
+    }
+    if (abspos) {
+        double tv = st_find(n, &P_TOP) ? css_px(st_find(n, &P_TOP), 0) : 0;
+        double lv = st_find(n, &P_LEFT) ? css_px(st_find(n, &P_LEFT), 0) : 0;
+        gtk_fixed_put(GTK_FIXED(OVER), host, (gint)lv, (gint)tv);
+        gtk_widget_show(host);
+    } else {
+        if (base.mt || ms2 || base.mauto) {
+            gtk_widget_set_margin_top(host, base.mt);
+            gtk_widget_set_margin_bottom(host, base.mt);
+            if (base.mauto) gtk_widget_set_halign(host, GTK_ALIGN_CENTER);
+            else if (ms2) {
+                gtk_widget_set_margin_start(host, ms2);
+                gtk_widget_set_margin_end(host, ms2);
+            }
+        }
+        gtk_box_pack_start(box, host, FALSE, FALSE, 0);
+    }
+    if (flexh && justsb) {
+        GtkWidget *sp = gtk_label_new(0);
+        gtk_widget_set_hexpand(sp, TRUE);
+        gtk_box_pack_start(v, sp, TRUE, TRUE, 0);
+    }
     build_block(n, v, base, depth + 1);
+    if (flexh && justsb) {
+        GtkWidget *sp = gtk_label_new(0);
+        gtk_widget_set_hexpand(sp, TRUE);
+        gtk_box_pack_start(v, sp, TRUE, TRUE, 0);
+    }
 }
 
 static void build_block(Node *n, GtkBox *box, FS base, int depth) {
@@ -564,6 +768,13 @@ static void build_block(Node *n, GtkBox *box, FS base, int depth) {
 static void clear_box(GtkBox *b) {
     GList *c = gtk_container_get_children(GTK_CONTAINER(b));
     for (GList *p = c; p; p = p->next) gtk_widget_destroy(GTK_WIDGET(p->data));
+    g_list_free(c);
+}
+
+static void clear_fixed(GtkFixed *f) {
+    GList *c = gtk_container_get_children(GTK_CONTAINER(f));
+    for (GList *p = c; p; p = p->next)
+        if (GTK_WIDGET(p->data) != CONTENT) gtk_widget_destroy(GTK_WIDGET(p->data));
     g_list_free(c);
 }
 
@@ -595,6 +806,7 @@ static void reload(void) {
         }
     }
     apply_styles(DOM);
+    clear_fixed(GTK_FIXED(OVER));
     clear_box(GTK_BOX(CONTENT));
     GdkRGBA bg = {1, 1, 1, 1};
     Node *bd = find_tag(DOM, K4('b', 'o', 'd', 'y'));
@@ -810,10 +1022,14 @@ int main(int argc, char **argv) {
     GdkRGBA white = {1, 1, 1, 1};
     gtk_widget_override_background_color(CANVAS, GTK_STATE_FLAG_NORMAL, &white);
     gtk_container_add(GTK_CONTAINER(scrl), CANVAS);
+    OVER = gtk_fixed_new();
+    gtk_container_add(GTK_CONTAINER(CANVAS), OVER);
     CONTENT = vbox(10);
     gtk_container_set_border_width(GTK_CONTAINER(CONTENT), 12);
     gtk_widget_set_valign(CONTENT, GTK_ALIGN_START);
-    gtk_container_add(GTK_CONTAINER(CANVAS), CONTENT);
+    gtk_widget_set_hexpand(CONTENT, TRUE);
+    gtk_fixed_put(GTK_FIXED(OVER), CONTENT, 0, 0);
+    gtk_widget_show_all(CANVAS);
     gtk_entry_set_text(GTK_ENTRY(ENTRY), argv[1]);
     gtk_window_set_title(GTK_WINDOW(WIN), "peek \xe2\x80\x94 loading...");
     gtk_widget_show_all(WIN);
