@@ -53,7 +53,9 @@ typedef struct Prop Prop;
 struct Prop { const char *name; uint8_t f; void (*emit)(const char *v, int btn); };
 enum { P_INH = 1 };
 
-void e_fg(const char *, int), e_bg(const char *, int);
+void e_fg(const char *, int), e_bg(const char *, int), e_bgs(const char *, int);
+int bg_first_color(const char *v, char *out);
+char *var_expand(const char *v);
 void e_bold(const char *, int), e_italic(const char *, int);
 void e_deco(const char *, int), e_align(const char *, int);
 void e_trans(const char *, int), e_pad(const char *, int);
@@ -69,7 +71,7 @@ extern const Prop
     P_COLOR, P_BG, P_WEIGHT, P_FS, P_DECO, P_ALIGN,
     P_TRANS, P_PAD, P_WIDTH, P_BORDER, P_FSIZE, P_MARGIN, P_DISPLAY,
     P_BW, P_RADIUS, P_MINW, P_LH, P_POS, P_TOP, P_LEFT,
-    P_GAP, P_JUST, P_DIR, P_AI;
+    P_GAP, P_JUST, P_DIR, P_AI, P_BGS;
 const Prop *prop_find(const char *k);
 void ua_bold(Node *n);
 void ua_link(Node *n);
@@ -118,6 +120,7 @@ char *attr_get(Node *n, const char *k);
 void attr_set(Node *n, const char *k, const char *v);
 void collect_text(Node *n, char *out, size_t cap);
 Node *find_tag(Node *n, uint64_t k);
+void css_links(Node *n, Node **out, int *np, int cap);
 
 Node *parse_html(char *src);
 
@@ -134,6 +137,7 @@ void run_scripts(Node *n);
 void js_load_dyn(Node *n);
 JSValue mk_el(JSContext *ctx, Node *n);
 void js_fire(Node *n, const char *ty);
+char *load_url(const char *src, size_t *out);
 int oc_find(Node *n);
 void js_click(int i);
 int js_pump(void);

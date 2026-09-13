@@ -124,7 +124,35 @@ static int load_page(const char *u) {
         Node *t = st->child[0];
         css = t->text, t->text[t->tlen] = 0;
     }
-    parse_css(css);
+    Node *LK[64];
+    int nlk = 0;
+    css_links(DOM, LK, &nlk, 64);
+    char *ext = 0;
+    size_t extl = 0;
+    for (int i = 0; i < nlk; i++) {
+        char *hu = attr_get(LK[i], "href");
+        if (!hu || !*hu) continue;
+        size_t cl;
+        char *c = load_url(hu, &cl);
+        if (!c) continue;
+        ext = realloc(ext, extl + cl + 2);
+        if (!ext) oom();
+        memcpy(ext + extl, c, cl);
+        extl += cl;
+        ext[extl++] = '\n';
+        ext[extl] = 0;
+        free(c);
+    }
+    char *all = css;
+    if (extl) {
+        size_t il = strlen(css);
+        all = malloc(extl + il + 1);
+        if (!all) oom();
+        memcpy(all, ext, extl);
+        memcpy(all + extl, css, il + 1);
+        free(ext);
+    }
+    parse_css(all);
     apply_styles(DOM);
     qquery("button,a[href]", sizeof "button,a[href]" - 1);
     NBTN = NQL;

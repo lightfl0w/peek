@@ -24,13 +24,116 @@ const Prop
     P_GAP = {"gap", 0, 0},
     P_JUST = {"justify-content", 0, 0},
     P_DIR = {"flex-direction", 0, 0},
-    P_AI = {"align-items", 0, 0};
+    P_AI = {"align-items", 0, 0},
+    P_BGS = {"background", 0, e_bgs};
+
+typedef struct { char *k, *v; } Var;
+static Var *VAR;
+static int NV, VCAP;
+
+static const char *var_get(const char *k, int kl) {
+    for (int i = 0; i < NV; i++)
+        if ((int)strlen(VAR[i].k) == kl && !memcmp(VAR[i].k, k, kl)) return VAR[i].v;
+    return 0;
+}
+
+static void var_put(const char *k, int kl, char *v) {
+    for (int i = 0; i < NV; i++)
+        if ((int)strlen(VAR[i].k) == kl && !memcmp(VAR[i].k, k, kl)) {
+            VAR[i].v = v;
+            return;
+        }
+    GROW(VAR, NV, VCAP, Var);
+    VAR[NV].k = sdup(k, kl);
+    VAR[NV].v = v;
+    NV++;
+}
+
+static char *var_expand_len(const char *v, int n);
+
+char *var_expand(const char *v) {
+    const char *p = strstr(v, "var(");
+    if (!p) return 0;
+    char *out = malloc(strlen(v) * 16 + 64);
+    if (!out) oom();
+    size_t w = 0;
+    const char *s = v;
+    while (1) {
+        p = strstr(s, "var(");
+        if (!p) break;
+        memcpy(out + w, s, p - s);
+        w += p - s;
+        const char *in = p + 4;
+        int depth = 1;
+        const char *q = in;
+        while (*q && depth) {
+            if (*q == '(') depth++;
+            else if (*q == ')') depth--;
+            q++;
+        }
+        const char *close = depth ? in + strlen(in) : q - 1;
+        const char *cm = memchr(in, ',', close - in);
+        const char *nm = in;
+        int nl = cm ? (int)(cm - in) : (int)(close - in);
+        while (nl && ISWS(nm[0])) nm++, nl--;
+        while (nl && ISWS(nm[nl - 1])) nl--;
+        const char *val = var_get(nm, nl);
+        if (!val && cm) {
+            const char *fb = cm + 1;
+            int fl = (int)(close - fb);
+            while (fl && ISWS(fb[0])) fb++, fl--;
+            while (fl && ISWS(fb[fl - 1])) fl--;
+            char *fbx = var_expand_len(fb, fl);
+            if (fbx) val = fbx;
+            else {
+                char *fbs = malloc(fl + 1);
+                if (!fbs) oom();
+                memcpy(fbs, fb, fl);
+                fbs[fl] = 0;
+                val = fbs;
+            }
+        }
+        if (val) {
+            size_t vl = strlen(val);
+            memcpy(out + w, val, vl);
+            w += vl;
+        }
+        s = close < v + strlen(v) ? close + 1 : v + strlen(v);
+    }
+    strcpy(out + w, s);
+    return out;
+}
+
+static char *var_expand_len(const char *v, int n) {
+    char *tmp = malloc(n + 1);
+    if (!tmp) oom();
+    memcpy(tmp, v, n);
+    tmp[n] = 0;
+    char *r = var_expand(tmp);
+    free(tmp);
+    return r;
+}
+
+int bg_first_color(const char *v, char *out) {
+    if (!v) return 0;
+    char tmp[128];
+    snprintf(tmp, sizeof tmp, "%s", v);
+    for (char *p = strtok(tmp, " \t"); p; p = strtok(0, " \t")) {
+        if (strstr(p, "url(") || strstr(p, "gradient")) continue;
+        if (strchr(p, '(')) continue;
+        if (ansi_color(p) >= 0) {
+            snprintf(out, 32, "%s", p);
+            return 1;
+        }
+    }
+    return 0;
+}
 
 static const Prop *const PROPS[] = {
     &P_COLOR, &P_BG, &P_WEIGHT, &P_FS, &P_DECO, &P_ALIGN,
     &P_TRANS, &P_PAD, &P_WIDTH, &P_BORDER, &P_FSIZE, &P_MARGIN, &P_DISPLAY,
     &P_BW, &P_RADIUS, &P_MINW, &P_LH, &P_POS, &P_TOP, &P_LEFT,
-    &P_GAP, &P_JUST, &P_DIR, &P_AI,
+    &P_GAP, &P_JUST, &P_DIR, &P_AI, &P_BGS,
 };
 
 const Prop *prop_find(const char *k) {
@@ -58,20 +161,32 @@ void split_decls(char *s, char *e, Rule *r) {
         char *de = semi ? semi : e;
         char *c = memchr(s, ':', de - s);
         if (c) {
-            const Prop *p = prop_find(cut(s, c));
-            if (p) {
-                char *vv = cut(c + 1, de);
-                char *im = strstr(vv, "!important");
-                uint8_t flag = 0;
-                if (im) {
-                    flag = 1;
-                    *im = 0;
-                    while (im > vv && ISWS(im[-1])) *--im = 0;
+            char *kk = cut(s, c);
+            char *vv = cut(c + 1, de);
+            char *im0 = strstr(vv, "!important");
+            if (im0) {
+                *im0 = 0;
+                while (im0 > vv && ISWS(im0[-1])) *--im0 = 0;
+            }
+            char *ev = var_expand(vv);
+            if (ev) vv = ev;
+            if (kk[0] == '-' && kk[1] == '-') {
+                var_put(kk, strlen(kk), vv);
+            } else {
+                const Prop *p = prop_find(kk);
+                if (p) {
+                    char *im = strstr(vv, "!important");
+                    uint8_t flag = 0;
+                    if (im) {
+                        flag = 1;
+                        *im = 0;
+                        while (im > vv && ISWS(im[-1])) *--im = 0;
+                    }
+                    r->d[r->nd].p = p;
+                    r->d[r->nd].v = vv;
+                    r->d[r->nd].imp = flag;
+                    r->nd++;
                 }
-                r->d[r->nd].p = p;
-                r->d[r->nd].v = vv;
-                r->d[r->nd].imp = flag;
-                r->nd++;
             }
         }
         s = de + 1;
@@ -334,12 +449,15 @@ int match_selector(const Rule *r, Node *n) {
 static void apply_decls(Rule *r, Node *n, int spec) {
     for (int i = 0; i < r->nd; i++) {
         const Prop *p = r->d[i].p;
+        const char *vv = r->d[i].v;
+        char *ev = var_expand(vv);
+        if (ev) vv = ev;
         int sp = r->d[i].imp ? (1 << 20) + (spec & 0xffff) : spec;
         int j = 0;
         while (j < n->nst && n->st[j].p != p) j++;
-        if (j == n->nst) st_push(n, p, r->d[i].v, sp);
+        if (j == n->nst) st_push(n, p, vv, sp);
         else if (!n->st[j].v || sp >= n->st[j].spec) {
-            n->st[j].v = r->d[i].v;
+            n->st[j].v = vv;
             n->st[j].spec = sp;
         }
     }

@@ -181,3 +181,11 @@ Node *find_tag(Node *n, uint64_t k) {
     }
     return NULL;
 }
+
+void css_links(Node *n, Node **out, int *np, int cap) {
+    if (n->taglen == 4 && n->tagpk == K4('l', 'i', 'n', 'k') && *np < cap) {
+        char *rel = attr_get(n, "rel");
+        if (rel && strstr(rel, "style") && attr_get(n, "href")) out[(*np)++] = n;
+    }
+    for (int i = 0; i < n->nchild; i++) css_links(n->child[i], out, np, cap);
+}

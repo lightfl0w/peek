@@ -8,6 +8,7 @@ static JSValue ELPROTO;
 char **LOGS, **ALERTS;
 int NLOG, NAL;
 static int LCAP, ACAP;
+static int NEED_RL;
 
 static void tsize(Node *n, size_t *t) {
     if (n->def->f & T_TEXTN) { *t += n->tlen; return; }
@@ -638,7 +639,8 @@ static JSValue j_ct(JSContext *ctx, JSValueConst thisv, int ac, JSValueConst *av
 }
 
 int js_pump(void) {
-    int total = 0;
+    int total = NEED_RL;
+    NEED_RL = 0;
     for (int round = 0; round < 64; round++) {
         double now = now_ms();
         int fired = 0;
@@ -1118,6 +1120,10 @@ static char *load_src(const char *src, size_t *out) {
     return b;
 }
 
+char *load_url(const char *src, size_t *out) {
+    return load_src(src, out);
+}
+
 static JSModuleDef *js_module_loader(JSContext *ctx, const char *name, void *opaque) {
     (void)opaque;
     size_t len;
@@ -1225,19 +1231,38 @@ void js_load_dyn(Node *n) {
     const char *u = attr_get(n, "src");
     if (!u && is_link) u = attr_get(n, "href");
     if (!u) return;
+    if (is_link) {
+        char *rel = attr_get(n, "rel");
+        if (rel && strstr(rel, "style")) {
+            size_t cl;
+            char *c = load_src(u, &cl);
+            if (c) {
+                char *buf = malloc(cl + 1);
+                if (!buf) oom();
+                memcpy(buf, c, cl);
+                buf[cl] = 0;
+                parse_css(buf);
+                NEED_RL = 1;
+                free(c);
+            } else {
+                le_fire(n, "error");
+                return;
+            }
+        }
+        le_fire(n, "load");
+        return;
+    }
     size_t clen;
     char *code = load_src(u, &clen);
     if (!code) {
         le_fire(n, "error");
         return;
     }
-    if (is_script) {
-        char fn[640];
-        snprintf(fn, sizeof fn, "<%s>", u);
-        JSValue r = JS_Eval(CTX, code, clen, fn, JS_EVAL_TYPE_GLOBAL);
-        if (JS_IsException(r)) js_pexc(fn);
-        JS_FreeValue(CTX, r);
-    }
+    char fn[640];
+    snprintf(fn, sizeof fn, "<%s>", u);
+    JSValue r = JS_Eval(CTX, code, clen, fn, JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(r)) js_pexc(fn);
+    JS_FreeValue(CTX, r);
     free(code);
     le_fire(n, "load");
 }

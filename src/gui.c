@@ -1,5 +1,6 @@
 #include "peek.h"
 #include <gtk/gtk.h>
+#include <cairo.h>
 
 typedef struct {
     GdkRGBA col, bg;
@@ -231,6 +232,10 @@ static void apply_fs(Node *n, FS *s) {
     GdkRGBA c;
     if ((v = st_find(n, &P_COLOR)) && css_rgb(v, &c)) s->col = c;
     if ((v = st_find(n, &P_BG)) && css_rgb(v, &c)) s->bg = c, s->bgset = 1;
+    else if ((v = st_find(n, &P_BGS))) {
+        char col[32];
+        if (bg_first_color(v, col) && css_rgb(col, &c)) s->bg = c, s->bgset = 1;
+    }
     if ((v = st_find(n, &P_FSIZE))) {
         double f = css_px(v, s->fsz);
         if (f > 1) s->fsz = f, s->fszset = 1;
@@ -844,6 +849,20 @@ static void reload(void) {
     }
     gtk_window_set_title(GTK_WINDOW(WIN), buf);
     if (CURURL) gtk_entry_set_text(GTK_ENTRY(ENTRY), CURURL);
+    const char *shot = getenv("PEEK_SHOT");
+    if (shot && gtk_widget_get_window(CANVAS)) {
+        while (gtk_events_pending()) gtk_main_iteration();
+        GdkWindow *gw = gtk_widget_get_window(CANVAS);
+        int sw = gdk_window_get_width(gw), sh = gdk_window_get_height(gw);
+        GdkPixbuf *px = gdk_pixbuf_get_from_window(gw, 0, 0, sw, sh);
+        if (px) {
+            gdk_pixbuf_save(px, shot, "png", 0, 0);
+            g_object_unref(px);
+            fprintf(stderr, "peekg: screenshot saved %s\n", shot);
+        } else {
+            fprintf(stderr, "peekg: screenshot failed\n");
+        }
+    }
 }
 
 static void on_click(GtkButton *b, gpointer u) {

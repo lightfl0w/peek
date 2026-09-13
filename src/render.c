@@ -24,6 +24,12 @@ void e_bg(const char *v, int btn) {
     else printf("\x1b[48;5;%dm", c);
 }
 
+void e_bgs(const char *v, int btn) {
+    char col[32];
+    if (!bg_first_color(v, col)) return;
+    e_bg(col, btn);
+}
+
 void e_bold(const char *v, int btn) {
     if (strcmp(v, "bold")) return;
     if (btn) BTN.flags |= 1;
