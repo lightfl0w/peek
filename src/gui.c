@@ -329,6 +329,8 @@ static void ptext(Para *P) {
     gtk_widget_set_halign(l, P->fs.center ? GTK_ALIGN_CENTER
                             : P->fs.right ? GTK_ALIGN_END
                             : GTK_ALIGN_FILL);
+    if (gtk_orientable_get_orientation(GTK_ORIENTABLE(P->box)) == GTK_ORIENTATION_VERTICAL)
+        gtk_widget_set_hexpand(l, TRUE);
     g_signal_connect(l, "activate-link", G_CALLBACK(nav_link), 0);
     gtk_box_pack_start(P->box, l, FALSE, FALSE, 0);
     g_string_free(P->m, TRUE);
@@ -598,6 +600,7 @@ static GtkWidget *vbox(int sp) {
 
 static void build_li(Node *n, GtkBox *box, uint64_t k, int idx, int depth) {
     GtkBox *row = GTK_BOX(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8));
+    gtk_widget_set_hexpand(GTK_WIDGET(row), TRUE);
     gtk_box_pack_start(box, GTK_WIDGET(row), FALSE, FALSE, 0);
     GString *m = g_string_new(0);
     if (k == K2('o', 'l')) g_string_append_printf(m, "<span foreground='#7aa2f7'>%d.</span>", idx);
@@ -636,6 +639,7 @@ static void build_table(Node *n, GtkBox *box, int depth) {
         }
         if (!(r->taglen == 2 && r->tagpk == K2('t', 'r'))) continue;
         GtkBox *row = GTK_BOX(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 24));
+        gtk_widget_set_hexpand(GTK_WIDGET(row), TRUE);
         gtk_box_pack_start(v, GTK_WIDGET(row), FALSE, FALSE, 0);
         for (int j = 0; j < r->nchild; j++) {
             Node *d = r->child[j];
@@ -653,7 +657,9 @@ static void build_tag(Node *n, GtkBox *box, int depth) {
     uint64_t k = n->tagpk;
     int tl = n->taglen;
     if (tl == 2 && k == K2('h', 'r')) {
-        gtk_box_pack_start(box, gtk_separator_new(GTK_ORIENTATION_HORIZONTAL), FALSE, FALSE, 6);
+        GtkWidget *sp = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+        gtk_widget_set_hexpand(sp, TRUE);
+        gtk_box_pack_start(box, sp, FALSE, FALSE, 6);
         return;
     }
     if (tl == 3 && k == K3('i', 'm', 'g')) return widget_img(n, box, 0);
@@ -732,6 +738,8 @@ static void build_tag(Node *n, GtkBox *box, int depth) {
                 gtk_widget_set_margin_end(host, ms2);
             }
         }
+        if (gtk_orientable_get_orientation(GTK_ORIENTABLE(box)) == GTK_ORIENTATION_VERTICAL)
+            gtk_widget_set_hexpand(host, TRUE);
         gtk_box_pack_start(box, host, FALSE, FALSE, 0);
     }
     if (flexh && justsb) {
@@ -1022,13 +1030,16 @@ int main(int argc, char **argv) {
     GdkRGBA white = {1, 1, 1, 1};
     gtk_widget_override_background_color(CANVAS, GTK_STATE_FLAG_NORMAL, &white);
     gtk_container_add(GTK_CONTAINER(scrl), CANVAS);
+    GtkWidget *ovl = gtk_overlay_new();
+    gtk_container_add(GTK_CONTAINER(CANVAS), ovl);
     OVER = gtk_fixed_new();
-    gtk_container_add(GTK_CONTAINER(CANVAS), OVER);
+    gtk_widget_set_hexpand(OVER, TRUE);
+    gtk_widget_set_vexpand(OVER, TRUE);
     CONTENT = vbox(10);
     gtk_container_set_border_width(GTK_CONTAINER(CONTENT), 12);
     gtk_widget_set_valign(CONTENT, GTK_ALIGN_START);
-    gtk_widget_set_hexpand(CONTENT, TRUE);
-    gtk_fixed_put(GTK_FIXED(OVER), CONTENT, 0, 0);
+    gtk_container_add(GTK_CONTAINER(ovl), CONTENT);
+    gtk_overlay_add_overlay(GTK_OVERLAY(ovl), OVER);
     gtk_widget_show_all(CANVAS);
     gtk_entry_set_text(GTK_ENTRY(ENTRY), argv[1]);
     gtk_window_set_title(GTK_WINDOW(WIN), "peek \xe2\x80\x94 loading...");
